@@ -20,13 +20,13 @@
 				<p class="welcome-desc">Analizza lo spazio su disco e pulisci le directory inutili.</p>
 				<div class="scan-input-group">
 					<label for="scanPath">Directory da scansionare</label>
-					<input type="text" id="scanPath" placeholder="~/..." />
+					<div class="autocomplete-wrapper">
+						<input type="text" id="scanPath" placeholder="~/..." autocomplete="off" />
+						<div id="autocompleteList" class="autocomplete-list hidden"></div>
+					</div>
 				</div>
 				<button id="btnScan" class="btn btn-primary">Scansiona</button>
-				<div id="cacheInfo" class="cache-info hidden">
-					<p id="cacheText"></p>
-					<button id="btnLoadCache" class="btn btn-secondary">Usa cache</button>
-				</div>
+				<div id="cacheList" class="cache-list hidden"></div>
 			</div>
 		</div>
 

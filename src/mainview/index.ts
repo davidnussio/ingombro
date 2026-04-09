@@ -15,7 +15,8 @@ type AppRPC = {
 			scanDirectory: { params: { dirPath: string }; response: { success: boolean; error?: string } };
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
-			checkCache: { params: {}; response: { hasCache: boolean; timestamp?: number; rootPath?: string } };
+			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
+			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 		};
 		messages: {};
 	};
@@ -24,7 +25,6 @@ type AppRPC = {
 		messages: {
 			scanProgress: { currentDir: string; dirs: number; files: number };
 			scanComplete: { tree: DirEntry };
-			cacheFound: { timestamp: number; rootPath: string };
 			error: { message: string };
 		};
 	};
@@ -46,18 +46,6 @@ const rpc = Electroview.defineRPC<AppRPC>({
 				navigationStack = [tree];
 				showScreen("results");
 				renderResults(tree);
-			},
-			cacheFound: ({ timestamp, rootPath }) => {
-				const date = new Date(timestamp);
-				const dateStr = date.toLocaleDateString("it-IT", {
-					day: "numeric", month: "long", year: "numeric",
-					hour: "2-digit", minute: "2-digit",
-				});
-				const cacheInfo = document.getElementById("cacheInfo")!;
-				const cacheText = document.getElementById("cacheText")!;
-				cacheInfo.classList.remove("hidden");
-				cacheText.textContent = `Cache trovata: ${rootPath} (${dateStr})`;
-				(document.getElementById("scanPath") as HTMLInputElement).value = rootPath;
 			},
 			error: ({ message }) => {
 				alert("Errore: " + message);
@@ -368,12 +356,15 @@ $("btnBack").addEventListener("click", () => {
 		renderResults(navigationStack[navigationStack.length - 1]!);
 	} else {
 		showScreen("welcome");
+		renderCacheList();
 	}
 });
 
 // --- Scan ---
 $("btnScan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
+	if (!dirPath) return;
+	acList.classList.add("hidden");
 	showScreen("scanning");
 	electrobun.rpc?.request?.scanDirectory({ dirPath });
 });
@@ -384,24 +375,62 @@ $("btnRescan").addEventListener("click", () => {
 	electrobun.rpc?.request?.scanDirectory({ dirPath });
 });
 
-$("btnLoadCache").addEventListener("click", async () => {
-	const dirPath = scanPathInput.value.trim();
-	showScreen("scanning");
-	const result = await electrobun.rpc?.request?.getChildren({ dirPath });
-	if (result && result.children) {
-		const tree: DirEntry = {
-			path: dirPath,
-			name: dirPath.split("/").pop() || dirPath,
-			size: result.children.reduce((s: number, c: DirEntry) => s + c.size, 0),
-			isDir: true,
-			children: result.children,
-		};
-		currentTree = tree;
-		navigationStack = [tree];
-		showScreen("results");
-		renderResults(tree);
+// --- Render cache list ---
+async function renderCacheList() {
+	const result = await electrobun.rpc?.request?.getCacheList({});
+	const container = $("cacheList");
+	container.innerHTML = "";
+	if (!result || result.entries.length === 0) {
+		container.classList.add("hidden");
+		return;
 	}
-});
+	container.classList.remove("hidden");
+	for (const entry of result.entries) {
+		const date = new Date(entry.timestamp);
+		const dateStr = date.toLocaleDateString("it-IT", {
+			day: "numeric", month: "short",
+			hour: "2-digit", minute: "2-digit",
+		});
+		const card = document.createElement("div");
+		card.className = "cache-card";
+		card.innerHTML = `
+			<span class="cache-card-path" title="${escapeAttr(entry.rootPath)}">${escapeHtml(entry.rootPath)}</span>
+			<div class="cache-card-row">
+				<span class="cache-card-date">${dateStr}</span>
+				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">Apri cache</button>
+				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">Scansiona</button>
+			</div>
+		`;
+		container.appendChild(card);
+	}
+	container.querySelectorAll("[data-action='open']").forEach((btn) => {
+		btn.addEventListener("click", async (e) => {
+			const path = (e.currentTarget as HTMLElement).dataset.path!;
+			scanPathInput.value = path;
+			showScreen("scanning");
+			const res = await electrobun.rpc?.request?.getChildren({ dirPath: path });
+			if (res && res.children) {
+				const tree: DirEntry = {
+					path, name: path.split("/").pop() || path,
+					size: res.children.reduce((s: number, c: DirEntry) => s + c.size, 0),
+					isDir: true, children: res.children,
+				};
+				currentTree = tree;
+				navigationStack = [tree];
+				showScreen("results");
+				renderResults(tree);
+			}
+		});
+	});
+	container.querySelectorAll("[data-action='rescan']").forEach((btn) => {
+		btn.addEventListener("click", (e) => {
+			const path = (e.currentTarget as HTMLElement).dataset.path!;
+			scanPathInput.value = path;
+			showScreen("scanning");
+			electrobun.rpc?.request?.scanDirectory({ dirPath: path });
+		});
+	});
+}
 
 // --- Delete modal ---
 $("btnCancelDelete").addEventListener("click", () => {
@@ -435,5 +464,107 @@ window.addEventListener("resize", () => {
 	}
 });
 
-// --- Init: check cache ---
-electrobun.rpc?.request?.checkCache({});
+// --- Autocomplete ---
+const acList = $("autocompleteList");
+let acIndex = -1;
+let acDebounce: ReturnType<typeof setTimeout> | null = null;
+
+async function fetchSuggestions(partial: string) {
+	if (!partial || partial.length < 1) {
+		acList.classList.add("hidden");
+		return;
+	}
+	try {
+		const result = await electrobun.rpc?.request?.listDir({ partial });
+		console.log("[autocomplete] partial:", partial, "result:", result);
+		if (!result || !result.suggestions || result.suggestions.length === 0) {
+			acList.classList.add("hidden");
+			return;
+		}
+		acIndex = -1;
+		acList.innerHTML = "";
+		for (const s of result.suggestions) {
+			const item = document.createElement("div");
+			item.className = "autocomplete-item";
+			item.textContent = s;
+			item.addEventListener("mousedown", (e) => {
+				e.preventDefault();
+				scanPathInput.value = s + "/";
+				acList.classList.add("hidden");
+				fetchSuggestions(s + "/");
+			});
+			acList.appendChild(item);
+		}
+		acList.classList.remove("hidden");
+	} catch (err) {
+		console.error("[autocomplete] error:", err);
+		acList.classList.add("hidden");
+	}
+}
+
+scanPathInput.addEventListener("input", () => {
+	if (acDebounce) clearTimeout(acDebounce);
+	acDebounce = setTimeout(() => {
+		fetchSuggestions(scanPathInput.value);
+	}, 120);
+});
+
+scanPathInput.addEventListener("keydown", (e) => {
+	const items = acList.querySelectorAll(".autocomplete-item");
+	const isOpen = !acList.classList.contains("hidden") && items.length > 0;
+
+	if (e.key === "Enter") {
+		if (isOpen && acIndex >= 0) {
+			e.preventDefault();
+			const selected = items[acIndex] as HTMLElement;
+			const val = selected.textContent || "";
+			scanPathInput.value = val + "/";
+			acList.classList.add("hidden");
+			fetchSuggestions(val + "/");
+		} else {
+			// Close autocomplete and let the scan happen
+			acList.classList.add("hidden");
+		}
+		return;
+	}
+
+	if (!isOpen) return;
+
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		acIndex = Math.min(acIndex + 1, items.length - 1);
+		updateAcActive(items);
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		acIndex = Math.max(acIndex - 1, 0);
+		updateAcActive(items);
+	} else if (e.key === "Escape") {
+		acList.classList.add("hidden");
+	} else if (e.key === "Tab" && acIndex >= 0) {
+		e.preventDefault();
+		const selected = items[acIndex] as HTMLElement;
+		const val = selected.textContent || "";
+		scanPathInput.value = val + "/";
+		acList.classList.add("hidden");
+		fetchSuggestions(val + "/");
+	}
+});
+
+function updateAcActive(items: NodeListOf<Element>) {
+	items.forEach((el, i) => {
+		el.classList.toggle("active", i === acIndex);
+		if (i === acIndex) el.scrollIntoView({ block: "nearest" });
+	});
+}
+
+scanPathInput.addEventListener("blur", () => {
+	// Small delay to allow click on item
+	setTimeout(() => acList.classList.add("hidden"), 150);
+});
+
+scanPathInput.addEventListener("focus", () => {
+	if (scanPathInput.value) fetchSuggestions(scanPathInput.value);
+});
+
+// --- Init: load cache list ---
+renderCacheList();

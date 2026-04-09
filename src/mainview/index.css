@@ -60,7 +60,7 @@ body {
 }
 .welcome-card {
 	text-align: center;
-	max-width: 400px;
+	max-width: 480px;
 	padding: 40px;
 }
 .welcome-icon {
@@ -102,17 +102,82 @@ body {
 .scan-input-group input:focus {
 	border-color: var(--accent);
 }
-.cache-info {
-	margin-top: 20px;
-	padding: 14px;
-	background: var(--surface);
-	border-radius: var(--radius-sm);
-	border: 1px solid var(--border);
+/* Autocomplete */
+.autocomplete-wrapper {
+	position: relative;
 }
-.cache-info p {
+.autocomplete-list {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	z-index: 50;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-top: none;
+	border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+	max-height: 200px;
+	overflow-y: auto;
+}
+.autocomplete-item {
+	padding: 8px 14px;
 	font-size: 13px;
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	transition: background 0.1s;
+}
+.autocomplete-item:hover,
+.autocomplete-item.active {
+	background: var(--surface-hover);
+}
+.autocomplete-item .ac-match {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+/* Cache list */
+.cache-list {
+	margin-top: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+}
+.cache-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	text-align: left;
+}
+.cache-card-path {
+	font-size: 12px;
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.cache-card-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.cache-card-date {
+	font-size: 11px;
 	color: var(--text-muted);
-	margin-bottom: 10px;
+	white-space: nowrap;
+	flex: 1;
+}
+.cache-card-btn {
+	flex-shrink: 0;
+	padding: 3px 10px !important;
+	font-size: 11px !important;
 }
 
 /* Scanning screen */
@@ -302,8 +367,8 @@ body {
 .btn-primary {
 	background: var(--accent);
 	color: white;
-	width: 100%;
 }
+#btnScan { width: 100%; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary {
 	background: var(--surface);

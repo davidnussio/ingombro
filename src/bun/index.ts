@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow, Screen } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Screen, ApplicationMenu } from "electrobun/bun";
 import { existsSync, statSync, readdirSync, rmSync } from "fs";
 import { join, basename, resolve } from "path";
 import { homedir } from "os";
@@ -12,10 +12,14 @@ interface DirEntry {
 	isDir: boolean;
 }
 
-interface CacheData {
+interface CacheEntry {
 	timestamp: number;
 	rootPath: string;
 	tree: DirEntry;
+}
+
+interface CacheData {
+	entries: CacheEntry[];
 }
 
 // --- Progress tracking ---
@@ -29,24 +33,40 @@ function expandPath(p: string): string {
 }
 
 // --- Cache ---
+const MAX_CACHE_ENTRIES = 10;
 const CACHE_FILE = join(homedir(), ".diskscanner_cache.json");
 
-async function loadCache(): Promise<CacheData | null> {
+async function loadCacheStore(): Promise<CacheData> {
 	try {
 		if (existsSync(CACHE_FILE)) {
 			const text = await Bun.file(CACHE_FILE).text();
-			return JSON.parse(text) as CacheData;
+			const parsed = JSON.parse(text);
+			// Migrate old single-entry format
+			if (parsed && !parsed.entries && parsed.rootPath) {
+				return { entries: [{ timestamp: parsed.timestamp, rootPath: parsed.rootPath, tree: parsed.tree }] };
+			}
+			return parsed as CacheData;
 		}
 	} catch {}
-	return null;
+	return { entries: [] };
 }
 
-function saveCache(data: CacheData) {
+function saveCacheStore(data: CacheData) {
 	try {
 		Bun.write(CACHE_FILE, JSON.stringify(data));
 	} catch (e) {
 		console.error("[disk-scanner] Failed to save cache:", e);
 	}
+}
+
+function upsertCacheEntry(store: CacheData, entry: CacheEntry): CacheData {
+	const filtered = store.entries.filter((e) => e.rootPath !== entry.rootPath);
+	filtered.unshift(entry);
+	return { entries: filtered.slice(0, MAX_CACHE_ENTRIES) };
+}
+
+function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | null {
+	return store.entries.find((e) => e.rootPath === rootPath) || null;
 }
 
 // --- Filesystem Scanner (with progress) ---
@@ -113,7 +133,7 @@ function getDirSizeShallow(dirPath: string): number {
 	return total;
 }
 
-function removeDirFromCache(cache: CacheData, targetPath: string): boolean {
+function removeDirFromCacheEntry(cacheEntry: CacheEntry, targetPath: string): boolean {
 	function removeFromEntry(entry: DirEntry): number {
 		if (!entry.children) return 0;
 		const idx = entry.children.findIndex((c) => c.path === targetPath);
@@ -132,7 +152,7 @@ function removeDirFromCache(cache: CacheData, targetPath: string): boolean {
 		}
 		return 0;
 	}
-	return removeFromEntry(cache.tree) > 0;
+	return removeFromEntry(cacheEntry.tree) > 0;
 }
 
 // --- Window & RPC ---
@@ -145,7 +165,8 @@ const rpc = BrowserView.defineRPC<{
 			scanDirectory: { params: { dirPath: string }; response: { success: boolean; error?: string } };
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
-			checkCache: { params: {}; response: { hasCache: boolean; timestamp?: number; rootPath?: string } };
+			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
+			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 		};
 		messages: {};
 	};
@@ -154,7 +175,6 @@ const rpc = BrowserView.defineRPC<{
 		messages: {
 			scanProgress: { currentDir: string; dirs: number; files: number };
 			scanComplete: { tree: DirEntry };
-			cacheFound: { timestamp: number; rootPath: string };
 			error: { message: string };
 		};
 	};
@@ -162,16 +182,11 @@ const rpc = BrowserView.defineRPC<{
 	maxRequestTime: 300000,
 	handlers: {
 		requests: {
-			checkCache: async () => {
-				const cache = await loadCache();
-				if (cache) {
-					rpc.send.cacheFound({
-						timestamp: cache.timestamp,
-						rootPath: cache.rootPath,
-					});
-					return { hasCache: true, timestamp: cache.timestamp, rootPath: cache.rootPath };
-				}
-				return { hasCache: false };
+			getCacheList: async () => {
+				const store = await loadCacheStore();
+				return {
+					entries: store.entries.map((e) => ({ rootPath: e.rootPath, timestamp: e.timestamp })),
+				};
 			},
 			scanDirectory: async ({ dirPath }) => {
 				const targetPath = expandPath(dirPath || "~");
@@ -184,7 +199,6 @@ const rpc = BrowserView.defineRPC<{
 
 				scanStats = { dirs: 0, files: 0, currentDir: targetPath };
 
-				// Send progress periodically
 				let lastProgressTime = 0;
 				const sendProgress = () => {
 					const now = Date.now();
@@ -200,12 +214,9 @@ const rpc = BrowserView.defineRPC<{
 
 				try {
 					const tree = scanDirectory(targetPath, 0, 3, sendProgress);
-					const cacheData: CacheData = {
-						timestamp: Date.now(),
-						rootPath: targetPath,
-						tree,
-					};
-					saveCache(cacheData);
+					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
+					const store = await loadCacheStore();
+					saveCacheStore(upsertCacheEntry(store, entry));
 					rpc.send.scanComplete({ tree });
 					return { success: true };
 				} catch (e: any) {
@@ -215,23 +226,70 @@ const rpc = BrowserView.defineRPC<{
 			},
 			getChildren: async ({ dirPath }) => {
 				const resolved = expandPath(dirPath || "~");
-				const cache = await loadCache();
-				if (cache) {
-					function findEntry(entry: DirEntry): DirEntry | null {
-						if (entry.path === resolved) return entry;
-						if (entry.children) {
-							for (const child of entry.children) {
-								const found = findEntry(child);
-								if (found) return found;
+				const store = await loadCacheStore();
+				// Find the cache entry whose rootPath matches or contains the resolved path
+				for (const cacheEntry of store.entries) {
+					if (resolved.startsWith(cacheEntry.rootPath) || cacheEntry.rootPath === resolved) {
+						function findEntry(entry: DirEntry): DirEntry | null {
+							if (entry.path === resolved) return entry;
+							if (entry.children) {
+								for (const child of entry.children) {
+									const found = findEntry(child);
+									if (found) return found;
+								}
 							}
+							return null;
 						}
-						return null;
+						const found = findEntry(cacheEntry.tree);
+						if (found) return { children: found.children || [] };
 					}
-					const found = findEntry(cache.tree);
-					if (found) return { children: found.children || [] };
 				}
 				const tree = scanDirectory(resolved, 0, 1);
 				return { children: tree.children || [] };
+			},
+			listDir: async ({ partial }) => {
+				try {
+					const input = partial || "~";
+					const expanded = expandPath(input);
+					let dirToList: string;
+					let prefix = "";
+
+					// Determine whether to list the directory itself or filter its parent
+					const endsWithSlash = input.endsWith("/");
+					const isExactDir = existsSync(expanded) && statSync(expanded, { throwIfNoEntry: false })?.isDirectory();
+
+					if (endsWithSlash || (isExactDir && (input === "~" || input === "/" || input.endsWith("/")))) {
+						dirToList = expanded;
+					} else if (isExactDir) {
+						// User typed e.g. "~/Downloads" which is a valid dir — list its contents
+						dirToList = expanded;
+					} else {
+						// Partial name — list parent and filter
+						dirToList = join(expanded, "..");
+						prefix = basename(expanded).toLowerCase();
+					}
+
+					if (!existsSync(dirToList)) return { suggestions: [] };
+
+					const items = readdirSync(dirToList, { withFileTypes: true });
+					const home = homedir();
+					const suggestions: string[] = [];
+
+					for (const item of items) {
+						if (!item.isDirectory() || item.name.startsWith(".")) continue;
+						if (prefix && !item.name.toLowerCase().startsWith(prefix)) continue;
+						const fullPath = join(dirToList, item.name);
+						const display = fullPath.startsWith(home) ? "~" + fullPath.slice(home.length) : fullPath;
+						suggestions.push(display);
+						if (suggestions.length >= 20) break;
+					}
+
+					suggestions.sort();
+					return { suggestions };
+				} catch (e) {
+					console.error("[disk-scanner] listDir error:", e);
+					return { suggestions: [] };
+				}
 			},
 			deleteEntry: async ({ entryPath }) => {
 				try {
@@ -241,11 +299,14 @@ const rpc = BrowserView.defineRPC<{
 					}
 					rmSync(resolved, { recursive: true, force: true });
 
-					const cache = await loadCache();
-					if (cache) {
-						removeDirFromCache(cache, resolved);
-						saveCache(cache);
-						rpc.send.scanComplete({ tree: cache.tree });
+					const store = await loadCacheStore();
+					// Update all cache entries that might contain this path
+					for (const cacheEntry of store.entries) {
+						if (removeDirFromCacheEntry(cacheEntry, resolved)) {
+							saveCacheStore(store);
+							rpc.send.scanComplete({ tree: cacheEntry.tree });
+							break;
+						}
 					}
 					return { success: true };
 				} catch (e: any) {
@@ -270,3 +331,31 @@ const mainWin = new BrowserWindow({
 	transparent: false,
 	rpc,
 });
+
+// --- Application Menu (enables Cmd+C, Cmd+V, etc.) ---
+ApplicationMenu.setApplicationMenu([
+	{
+		label: "Disk Scanner",
+		submenu: [
+			{ role: "about" },
+			{ type: "separator" },
+			{ role: "hide", accelerator: "CmdOrCtrl+H" },
+			{ role: "hideOthers", accelerator: "CmdOrCtrl+Shift+H" },
+			{ role: "showAll" },
+			{ type: "separator" },
+			{ role: "quit", accelerator: "CmdOrCtrl+Q" },
+		],
+	},
+	{
+		label: "Edit",
+		submenu: [
+			{ role: "undo", accelerator: "CmdOrCtrl+Z" },
+			{ role: "redo", accelerator: "CmdOrCtrl+Shift+Z" },
+			{ type: "separator" },
+			{ role: "cut", accelerator: "CmdOrCtrl+X" },
+			{ role: "copy", accelerator: "CmdOrCtrl+C" },
+			{ role: "paste", accelerator: "CmdOrCtrl+V" },
+			{ role: "selectAll", accelerator: "CmdOrCtrl+A" },
+		],
+	},
+]);
