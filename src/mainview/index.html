@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="it">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Disk Scanner</title>
+	<link rel="stylesheet" href="views://mainview/index.css" />
+</head>
+<body>
+	<div class="titlebar" id="titlebar">
+		<div class="titlebar-text">Disk Scanner</div>
+	</div>
+
+	<div id="app">
+		<!-- Welcome / Cache check screen -->
+		<div id="screen-welcome" class="screen active">
+			<div class="welcome-card">
+				<div class="welcome-icon">📁</div>
+				<h1>Disk Scanner</h1>
+				<p class="welcome-desc">Analizza lo spazio su disco e pulisci le directory inutili.</p>
+				<div class="scan-input-group">
+					<label for="scanPath">Directory da scansionare</label>
+					<input type="text" id="scanPath" placeholder="~/..." />
+				</div>
+				<button id="btnScan" class="btn btn-primary">Scansiona</button>
+				<div id="cacheInfo" class="cache-info hidden">
+					<p id="cacheText"></p>
+					<button id="btnLoadCache" class="btn btn-secondary">Usa cache</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- Scanning progress -->
+		<div id="screen-scanning" class="screen">
+			<div class="scanning-card">
+				<div class="spinner"></div>
+				<p class="scanning-text">Scansione in corso...</p>
+				<p id="scanStatus" class="scan-status"></p>
+				<p id="scanCurrentDir" class="scan-current-dir"></p>
+			</div>
+		</div>
+
+		<!-- Results screen -->
+		<div id="screen-results" class="screen">
+			<div class="results-header">
+				<div class="results-header-left">
+					<button id="btnBack" class="btn btn-icon" title="Torna indietro">←</button>
+					<h2 id="currentPath"></h2>
+					<span id="totalSize" class="total-size"></span>
+				</div>
+				<div class="results-header-right">
+					<button id="btnRescan" class="btn btn-secondary btn-sm">Riscansiona</button>
+				</div>
+			</div>
+			<div class="results-body">
+				<div class="viz-container" id="vizContainer">
+					<canvas id="treemapCanvas"></canvas>
+				</div>
+				<div class="dir-list" id="dirList"></div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Delete confirmation modal -->
+	<div id="modal-delete" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="modal-card">
+			<h3>Conferma eliminazione</h3>
+			<p id="deleteMessage"></p>
+			<div class="modal-actions">
+				<button id="btnCancelDelete" class="btn btn-secondary">Annulla</button>
+				<button id="btnConfirmDelete" class="btn btn-danger">Elimina</button>
+			</div>
+		</div>
+	</div>
+
+	<script type="module" src="views://mainview/index.js"></script>
+</body>
+</html>
