@@ -623,30 +623,6 @@ function escapeAttr(s: string): string {
 }
 
 // --- Smart Clean ---
-const PROJECT_ICONS: Record<string, string> = {
-	"Node / Bun": "📦", Python: "🐍", Rust: "🦀", iOS: "🍎",
-	"Build artifacts": "🔨", Cache: "🗄️", "Cache generico": "🗄️",
-	Parcel: "📦", Monorepo: "📦", "Test artifacts": "🧪", Storybook: "📖",
-	"Next.js": "▲", Nuxt: "💚", SvelteKit: "🔥", Astro: "🚀",
-	Remix: "💿", Angular: "🅰️", Docusaurus: "🦖", MkDocs: "📝",
-	"Rust / Maven": "🦀", "Java/Maven": "☕", "Java/Kotlin": "☕",
-	Ruby: "💎", Elixir: "💧", Zig: "⚡", Haskell: "λ",
-	Terraform: "🏗️", "AWS CDK": "☁️", Serverless: "⚡",
-	"Dart/Flutter": "🎯",
-	// ML
-	Jupyter: "📓", MLflow: "🧪", "Weights & Biases": "📊", "PyTorch Lightning": "⚡",
-	// Office
-	Windows: "🪟", macOS: "🍎",
-	// Design
-	Illustrator: "🎨", Affinity: "🎨", Sketch: "💎",
-	// Video
-	"Premiere Pro": "🎬", "DaVinci Resolve": "🎬", "Final Cut Pro": "🎬", "Multi-app": "🎬",
-	// Music
-	"Logic Pro": "🎵", "Logic / Pro Tools": "🎵", "Ableton Live": "🎵", "FL Studio": "🎵",
-	// Vendor
-	Go: "🐹", PHP: "🐘",
-};
-
 async function detectAndShowCleanables(rootPath: string) {
 	const banner = $("cleanBanner");
 	banner.classList.remove("hidden");
@@ -685,15 +661,13 @@ function openCleanModal() {
 
 	list.innerHTML = "";
 	for (const item of currentCleanables.items) {
-		const icon = PROJECT_ICONS[item.projectType] || "📁";
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
 		const isChecked = cleanableSelected.has(item.path);
 		const titleAttr = item.note ? ` title="${escapeAttr(item.note)}"` : "";
 		row.innerHTML = `
 			<input type="checkbox" ${isChecked ? "checked" : ""} data-path="${escapeAttr(item.path)}" />
-			<div class="clean-item-icon"${titleAttr}>${icon}</div>
-			<div class="clean-item-info">
+			<div class="clean-item-info"${titleAttr}>
 				<div class="clean-item-project">${escapeHtml(item.projectPath)}</div>
 				<div class="clean-item-detail">${escapeHtml(item.folderName)}</div>
 			</div>

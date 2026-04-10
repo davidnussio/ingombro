@@ -814,12 +814,6 @@ body {
 	flex-shrink: 0;
 	cursor: pointer;
 }
-.clean-item-icon {
-	font-size: 16px;
-	flex-shrink: 0;
-	width: 22px;
-	text-align: center;
-}
 .clean-item-info {
 	flex: 1;
 	min-width: 0;
