@@ -18,7 +18,7 @@ const en: Translations = {
 	cleanRecoverable: (size, count) => `${size} recoverable from ${count} project folder${count === 1 ? "" : "s"}`,
 	cleanDetails: "View details",
 
-	smartCleanTitle: "🧹 Smart Clean",
+	smartCleanTitle: "✨ Smart Clean",
 	cleanModalDesc: "Removable project folders to free up space.",
 	selectAll: "Select all",
 	cleanSelected: (count) => `${count} selected`,

@@ -1,7 +1,8 @@
 import { BrowserView, BrowserWindow, Screen, ApplicationMenu } from "electrobun/bun";
-import { existsSync, statSync, readdirSync, rmSync, mkdirSync, readFileSync } from "fs";
+import { statSync, readdirSync, rmSync, mkdirSync } from "fs";
 import { join, basename, resolve, extname } from "path";
 import { homedir } from "os";
+import { $ } from "bun";
 
 // --- Types ---
 interface DirEntry {
@@ -52,7 +53,7 @@ function expandPath(p: string): string {
 // --- App directory ---
 const APP_DIR = join(homedir(), ".ingombro");
 function ensureAppDir() {
-	if (!existsSync(APP_DIR)) mkdirSync(APP_DIR, { recursive: true });
+	mkdirSync(APP_DIR, { recursive: true });
 }
 
 // --- Settings ---
@@ -61,9 +62,8 @@ const SETTINGS_FILE = join(APP_DIR, "settings.json");
 async function loadSettings(): Promise<AppSettings> {
 	try {
 		ensureAppDir();
-		if (existsSync(SETTINGS_FILE)) {
-			const text = await Bun.file(SETTINGS_FILE).text();
-			const parsed = JSON.parse(text);
+		if (await Bun.file(SETTINGS_FILE).exists()) {
+			const parsed = await Bun.file(SETTINGS_FILE).json();
 			return { ...DEFAULT_SETTINGS, ...parsed };
 		}
 	} catch {}
@@ -80,37 +80,68 @@ async function saveSettings(settings: AppSettings) {
 }
 
 // --- Cache ---
-const CACHE_FILE = join(APP_DIR, "cache.json");
+const CACHE_FILE = join(APP_DIR, "cache.json.gz");
 // Migrate old cache file if exists
 const OLD_CACHE_FILE = join(homedir(), ".diskscanner_cache.json");
-if (existsSync(OLD_CACHE_FILE) && !existsSync(CACHE_FILE)) {
-	ensureAppDir();
-	try {
-		const oldData = require("fs").readFileSync(OLD_CACHE_FILE, "utf-8");
-		require("fs").writeFileSync(CACHE_FILE, oldData);
-		rmSync(OLD_CACHE_FILE);
-	} catch {}
-}
+const OLD_CACHE_FILE_UNGZ = join(APP_DIR, "cache.json");
+// Migrate from old locations
+try {
+	const cacheExists = await Bun.file(CACHE_FILE).exists();
+	if (!cacheExists) {
+		ensureAppDir();
+		// Migrate from ~/.diskscanner_cache.json
+		if (await Bun.file(OLD_CACHE_FILE).exists()) {
+			const oldData = await Bun.file(OLD_CACHE_FILE).text();
+			const compressed = Bun.gzipSync(new TextEncoder().encode(oldData));
+			await Bun.write(CACHE_FILE, compressed);
+			rmSync(OLD_CACHE_FILE, { force: true });
+		}
+		// Migrate from uncompressed cache.json
+		else if (await Bun.file(OLD_CACHE_FILE_UNGZ).exists()) {
+			const oldData = await Bun.file(OLD_CACHE_FILE_UNGZ).text();
+			const compressed = Bun.gzipSync(new TextEncoder().encode(oldData));
+			await Bun.write(CACHE_FILE, compressed);
+			rmSync(OLD_CACHE_FILE_UNGZ, { force: true });
+		}
+	}
+} catch {}
 
 async function loadCacheStore(): Promise<CacheData> {
 	try {
-		if (existsSync(CACHE_FILE)) {
-			const text = await Bun.file(CACHE_FILE).text();
-			const parsed = JSON.parse(text);
+		const cacheFile = Bun.file(CACHE_FILE);
+		if (await cacheFile.exists()) {
+			const raw = Bun.gunzipSync(new Uint8Array(await cacheFile.arrayBuffer()));
+			const parsed = JSON.parse(new TextDecoder().decode(raw));
 			// Migrate old single-entry format
 			if (parsed && !parsed.entries && parsed.rootPath) {
 				return { entries: [{ timestamp: parsed.timestamp, rootPath: parsed.rootPath, tree: parsed.tree }] };
 			}
 			return parsed as CacheData;
 		}
-	} catch {}
+	} catch {
+		// Fallback: try reading as plain JSON (pre-compression migration)
+		try {
+			const cacheFile = Bun.file(CACHE_FILE);
+			if (await cacheFile.exists()) {
+				const parsed = await cacheFile.json();
+				if (parsed && !parsed.entries && parsed.rootPath) {
+					return { entries: [{ timestamp: parsed.timestamp, rootPath: parsed.rootPath, tree: parsed.tree }] };
+				}
+				return parsed as CacheData;
+			}
+		} catch {}
+	}
 	return { entries: [] };
 }
 
 function saveCacheStore(data: CacheData) {
 	try {
 		ensureAppDir();
-		Bun.write(CACHE_FILE, JSON.stringify(data));
+		const json = JSON.stringify(data);
+		// Punto 8: Bun.hash() per tracciare le modifiche alla cache
+		console.log(`[cache] Saving cache (hash=${Bun.hash(json).toString(16)}, entries=${data.entries.length})`);
+		const compressed = Bun.gzipSync(new TextEncoder().encode(json));
+		Bun.write(CACHE_FILE, compressed);
 	} catch (e) {
 		console.error("[ingombro] Failed to save cache:", e);
 	}
@@ -372,17 +403,15 @@ function getDirSizeRecursive(dirPath: string): number {
 // Controlla se un sentinel (possibilmente glob con *) esiste nella directory
 function sentinelExists(dirPath: string, sentinel: string): boolean {
 	if (sentinel.includes("*")) {
-		// Glob semplice: *.ext → controlla se esiste un file con quell'estensione
-		const ext = sentinel.replace("*", "");
-		try {
-			const items = readdirSync(dirPath, { withFileTypes: true });
-			return items.some((i) => i.isFile() && i.name.endsWith(ext));
-		} catch {
-			return false;
+		// Punto 2: Bun.Glob per pattern matching nativo
+		const glob = new Bun.Glob(sentinel);
+		for (const _match of glob.scanSync({ cwd: dirPath, onlyFiles: true })) {
+			return true;
 		}
+		return false;
 	}
 	// Supporta sentinel con path (es. ".storybook/main.js")
-	return existsSync(join(dirPath, sentinel));
+	return !!statSync(join(dirPath, sentinel), { throwIfNoEntry: false });
 }
 
 function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResult {
@@ -437,7 +466,7 @@ function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResu
 				if (entry.name === "vendor") {
 					let vendorProjectType: string | null = null;
 					for (const v of VENDOR_DISAMBIG) {
-						if (existsSync(join(dirPath, v.sentinel))) {
+						if (statSync(join(dirPath, v.sentinel), { throwIfNoEntry: false })) {
 							vendorProjectType = v.projectType;
 							break;
 						}
@@ -464,9 +493,9 @@ function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResu
 					// Disambiguazione target/: identifica il tipo di progetto specifico
 					let resolvedProjectType = rule.projectType;
 					if (entry.name === "target" && rule.disambig) {
-						if (existsSync(join(dirPath, "Cargo.toml"))) {
+						if (statSync(join(dirPath, "Cargo.toml"), { throwIfNoEntry: false })) {
 							resolvedProjectType = "Rust";
-						} else if (existsSync(join(dirPath, "pom.xml"))) {
+						} else if (statSync(join(dirPath, "pom.xml"), { throwIfNoEntry: false })) {
 							resolvedProjectType = "Java/Maven";
 						}
 					}
@@ -576,10 +605,9 @@ const TYPE_CATEGORIES: { label: string; extensions: Set<string>; color: string }
 	{ label: "html", extensions: new Set([".html", ".htm", ".hbs", ".ejs", ".pug"]), color: "#e17055" },
 ];
 
-function getEntryInfoFromFS(entryPath: string): EntryInfo | null {
+async function getEntryInfoFromFS(entryPath: string): Promise<EntryInfo | null> {
 	try {
 		const resolved = expandPath(entryPath);
-		if (!existsSync(resolved)) return null;
 		const stat = statSync(resolved, { throwIfNoEntry: false });
 		if (!stat) return null;
 
@@ -676,11 +704,11 @@ function getEntryInfoFromFS(entryPath: string): EntryInfo | null {
 			} else if (TEXT_EXTENSIONS.has(ext) || basename(resolved).toLowerCase() === "makefile" || basename(resolved).toLowerCase() === "dockerfile") {
 				info.previewType = "text";
 				try {
-					const buf = readFileSync(resolved);
-					// Limit to 5KB
-					const slice = buf.subarray(0, 5120);
-					info.textPreview = slice.toString("utf-8");
-					if (buf.length > 5120) info.textPreview += "\n…";
+					// Punto 5: Bun.file() per la text preview
+					const file = Bun.file(resolved);
+					const buf = new Uint8Array(await file.slice(0, 5120).arrayBuffer());
+					info.textPreview = new TextDecoder().decode(buf);
+					if (file.size > 5120) info.textPreview += "\n…";
 				} catch {}
 			} else {
 				info.previewType = "none";
@@ -755,7 +783,7 @@ const rpc = BrowserView.defineRPC<{
 				const targetPath = expandPath(dirPath || "~");
 				console.log(`[scan] === REQUEST RECEIVED === dirPath="${dirPath}" targetPath="${targetPath}"`);
 
-				if (!existsSync(targetPath)) {
+				if (!statSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) {
 					return { success: false, error: "Directory not found" };
 				}
 
@@ -776,11 +804,11 @@ const rpc = BrowserView.defineRPC<{
 
 				const settings = await loadSettings();
 				console.log(`[scan] Starting scanDirectoryAsync (maxDepth=${settings.maxDepth})...`);
-				const startTime = Date.now();
+				const startNs = Bun.nanoseconds();
 				try {
 					const tree = await scanDirectoryAsync(targetPath, 0, settings.maxDepth, sendProgress);
-					const elapsed = Date.now() - startTime;
-					console.log(`[scan] Scan complete in ${elapsed}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
+					const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
+					console.log(`[scan] Scan complete in ${elapsedMs.toFixed(2)}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
 					const store = await loadCacheStore();
 					saveCacheStore(await upsertCacheEntry(store, entry));
@@ -788,7 +816,8 @@ const rpc = BrowserView.defineRPC<{
 					return { success: true, rootPath: targetPath };
 				} catch (e: any) {
 					if (e.message === "SCAN_CANCELLED") {
-						console.log(`[scan] Scan cancelled by user after ${Date.now() - startTime}ms`);
+						const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
+						console.log(`[scan] Scan cancelled by user after ${elapsedMs.toFixed(2)}ms`);
 						return { success: false, error: "SCAN_CANCELLED" };
 					}
 					console.error(`[scan] ERROR:`, e);
@@ -821,7 +850,6 @@ const rpc = BrowserView.defineRPC<{
 			validatePath: async ({ dirPath }) => {
 				try {
 					const resolved = expandPath(dirPath || "");
-					if (!resolved || !existsSync(resolved)) return { valid: false };
 					const stat = statSync(resolved, { throwIfNoEntry: false });
 					return { valid: !!stat?.isDirectory() };
 				} catch {
@@ -837,7 +865,7 @@ const rpc = BrowserView.defineRPC<{
 
 					// Determine whether to list the directory itself or filter its parent
 					const endsWithSlash = input.endsWith("/");
-					const isExactDir = existsSync(expanded) && statSync(expanded, { throwIfNoEntry: false })?.isDirectory();
+					const isExactDir = statSync(expanded, { throwIfNoEntry: false })?.isDirectory();
 
 					if (endsWithSlash || (isExactDir && (input === "~" || input === "/" || input.endsWith("/")))) {
 						dirToList = expanded;
@@ -850,7 +878,7 @@ const rpc = BrowserView.defineRPC<{
 						prefix = basename(expanded).toLowerCase();
 					}
 
-					if (!existsSync(dirToList)) return { suggestions: [] };
+					if (!statSync(dirToList, { throwIfNoEntry: false })?.isDirectory()) return { suggestions: [] };
 
 					const items = readdirSync(dirToList, { withFileTypes: true });
 					const home = homedir();
@@ -875,16 +903,16 @@ const rpc = BrowserView.defineRPC<{
 			deleteEntry: async ({ entryPath }) => {
 				try {
 					const resolved = expandPath(entryPath);
-					if (!existsSync(resolved)) {
+					if (!statSync(resolved, { throwIfNoEntry: false })) {
 						return { success: false, error: "Path does not exist" };
 					}
 
 					const settings = await loadSettings();
 					if (settings.deleteMode === "trash") {
-						// Move to macOS Trash using AppleScript
-						const name = basename(resolved);
-						const proc = Bun.spawnSync(["osascript", "-e", `tell application "Finder" to delete POSIX file "${resolved}"`]);
-						if (proc.exitCode !== 0) {
+						// Punto 1: Bun.$ Shell API per il Trash macOS
+						try {
+							await $`osascript -e ${"tell application \"Finder\" to delete POSIX file \"" + resolved + "\""}`.quiet();
+						} catch {
 							// Fallback to permanent delete
 							rmSync(resolved, { recursive: true, force: true });
 						}
@@ -924,11 +952,12 @@ const rpc = BrowserView.defineRPC<{
 			},
 			detectCleanables: async ({ rootPath }) => {
 				const resolved = expandPath(rootPath);
-				if (!existsSync(resolved)) return { items: [], totalSize: 0 };
+				if (!statSync(resolved, { throwIfNoEntry: false })?.isDirectory()) return { items: [], totalSize: 0 };
 				console.log(`[cleanables] Scanning ${resolved}...`);
-				const startTime = Date.now();
+				const startNs = Bun.nanoseconds();
 				const result = detectCleanables(resolved);
-				console.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${Date.now() - startTime}ms`);
+				const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
+				console.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${elapsedMs.toFixed(2)}ms`);
 				return result;
 			},
 			batchDelete: async ({ paths }) => {
@@ -942,7 +971,7 @@ const rpc = BrowserView.defineRPC<{
 				for (const p of paths) {
 					try {
 						const resolved = expandPath(p);
-						if (!existsSync(resolved)) {
+						if (!statSync(resolved, { throwIfNoEntry: false })) {
 							errors.push(`${p}: not found`);
 							continue;
 						}
@@ -950,8 +979,9 @@ const rpc = BrowserView.defineRPC<{
 						const size = getDirSizeRecursive(resolved);
 
 						if (settings.deleteMode === "trash") {
-							const proc = Bun.spawnSync(["osascript", "-e", `tell application "Finder" to delete POSIX file "${resolved}"`]);
-							if (proc.exitCode !== 0) {
+							try {
+								await $`osascript -e ${"tell application \"Finder\" to delete POSIX file \"" + resolved + "\""}`.quiet();
+							} catch {
 								rmSync(resolved, { recursive: true, force: true });
 							}
 						} else {

@@ -18,7 +18,7 @@ const ja: Translations = {
 	cleanRecoverable: (size, count) => `${count}個のプロジェクトフォルダから${size}を回収可能`,
 	cleanDetails: "詳細を表示",
 
-	smartCleanTitle: "🧹 Smart Clean",
+	smartCleanTitle: "✨ Smart Clean",
 	cleanModalDesc: "スペースを解放するために削除可能なプロジェクトフォルダ。",
 	selectAll: "すべて選択",
 	cleanSelected: (count) => `${count}件選択中`,

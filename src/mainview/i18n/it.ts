@@ -18,7 +18,7 @@ const it: Translations = {
 	cleanRecoverable: (size, count) => `${size} recuperabili da ${count} cartell${count === 1 ? "a" : "e"} di progetto`,
 	cleanDetails: "Vedi dettagli",
 
-	smartCleanTitle: "🧹 Smart Clean",
+	smartCleanTitle: "✨ Smart Clean",
 	cleanModalDesc: "Cartelle di progetto eliminabili per recuperare spazio.",
 	selectAll: "Seleziona tutto",
 	cleanSelected: (count) => `${count} selezionat${count === 1 ? "a" : "e"}`,

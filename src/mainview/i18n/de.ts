@@ -18,7 +18,7 @@ const de: Translations = {
 	cleanRecoverable: (size, count) => `${size} wiederherstellbar aus ${count} Projektordner${count === 1 ? "" : "n"}`,
 	cleanDetails: "Details anzeigen",
 
-	smartCleanTitle: "🧹 Smart Clean",
+	smartCleanTitle: "✨ Smart Clean",
 	cleanModalDesc: "Löschbare Projektordner zur Freigabe von Speicherplatz.",
 	selectAll: "Alle auswählen",
 	cleanSelected: (count) => `${count} ausgewählt`,
