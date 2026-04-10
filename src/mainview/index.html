@@ -15,17 +15,18 @@
 		<!-- Welcome / Cache check screen -->
 		<div id="screen-welcome" class="screen active">
 			<div class="welcome-card">
-				<div class="welcome-icon">📁</div>
+				<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="DiskLens" />
 				<h1>Disk Scanner</h1>
 				<p class="welcome-desc">Analizza lo spazio su disco e pulisci le directory inutili.</p>
 				<div class="scan-input-group">
-					<label for="scanPath">Directory da scansionare</label>
+					<label for="scanPath" id="scanPathLabel">Directory da scansionare</label>
 					<div class="autocomplete-wrapper">
-						<input type="text" id="scanPath" placeholder="~/..." autocomplete="off" />
+						<input type="text" id="scanPath" placeholder="~/" autocomplete="off" />
+						<span class="input-hint" id="inputHint">⌘↵</span>
 						<div id="autocompleteList" class="autocomplete-list hidden"></div>
 					</div>
 				</div>
-				<button id="btnScan" class="btn btn-primary">Scansiona</button>
+				<button id="btnScan" class="btn btn-primary" disabled>Scansiona</button>
 				<div id="cacheList" class="cache-list hidden"></div>
 			</div>
 		</div>

@@ -64,8 +64,10 @@ body {
 	padding: 40px;
 }
 .welcome-icon {
-	font-size: 56px;
+	width: 80px;
+	height: 80px;
 	margin-bottom: 16px;
+	border-radius: 18px;
 }
 .welcome-card h1 {
 	font-size: 28px;
@@ -99,12 +101,25 @@ body {
 	outline: none;
 	transition: border-color 0.2s;
 }
+.scan-input-group input::placeholder {
+	opacity: 0.4;
+}
 .scan-input-group input:focus {
 	border-color: var(--accent);
 }
 /* Autocomplete */
 .autocomplete-wrapper {
 	position: relative;
+}
+.input-hint {
+	position: absolute;
+	right: 12px;
+	top: 50%;
+	transform: translateY(-50%);
+	font-size: 12px;
+	color: var(--text-muted);
+	opacity: 0.4;
+	pointer-events: none;
 }
 .autocomplete-list {
 	position: absolute;
@@ -142,42 +157,85 @@ body {
 	margin-top: 20px;
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
+	gap: 2px;
 	max-height: 320px;
 	overflow-y: auto;
 }
 .cache-card {
 	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 8px 12px;
-	background: var(--surface);
-	border: 1px solid var(--border);
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	background: transparent;
+	border: none;
 	border-radius: var(--radius-sm);
 	text-align: left;
+	transition: background 0.15s;
+	cursor: default;
+	position: relative;
+}
+.cache-card:hover {
+	background: var(--surface);
+}
+.cache-card-info {
+	flex: 1;
+	min-width: 0;
 }
 .cache-card-path {
-	font-size: 12px;
+	font-size: 13px;
 	font-weight: 500;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.cache-card-row {
-	display: flex;
-	align-items: center;
-	gap: 8px;
+	display: block;
 }
 .cache-card-date {
 	font-size: 11px;
 	color: var(--text-muted);
 	white-space: nowrap;
-	flex: 1;
+}
+.cache-card-actions {
+	position: absolute;
+	right: 28px;
+	top: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-left: 24px;
+	background: linear-gradient(to right, transparent, var(--surface) 16px);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.15s;
+}
+.cache-card:hover .cache-card-actions {
+	opacity: 1;
+	pointer-events: auto;
 }
 .cache-card-btn {
 	flex-shrink: 0;
-	padding: 3px 10px !important;
+	padding: 4px 10px !important;
 	font-size: 11px !important;
+}
+.cache-card-delete {
+	position: absolute;
+	right: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 20px;
+	height: 20px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	font-size: 13px;
+	cursor: pointer;
+	border-radius: 4px;
+	opacity: 0;
+	transition: opacity 0.15s, color 0.15s;
+}
+.cache-card:hover .cache-card-delete { opacity: 1; }
+.cache-card-delete:hover {
+	color: var(--danger);
 }
 
 /* Scanning screen */
@@ -370,6 +428,10 @@ body {
 }
 #btnScan { width: 100%; }
 .btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
 .btn-secondary {
 	background: var(--surface);
 	color: var(--text);

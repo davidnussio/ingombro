@@ -98,7 +98,8 @@ function scanDirectory(dirPath: string, depth: number = 0, maxDepth: number = 3,
 					}
 				} else if (item.isFile()) {
 					const stat = statSync(fullPath, { throwIfNoEntry: false });
-					const fileSize = stat?.size ?? 0;
+					// Use blocks * 512 for real disk usage (handles sparse files correctly)
+					const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
 					entry.children!.push({ path: fullPath, name: item.name, size: fileSize, isDir: false });
 					entry.size += fileSize;
 					scanStats.files++;
@@ -121,7 +122,7 @@ function getDirSizeShallow(dirPath: string): number {
 				const fullPath = join(dirPath, item.name);
 				if (item.isFile()) {
 					const stat = statSync(fullPath, { throwIfNoEntry: false });
-					total += stat?.size ?? 0;
+					total += stat ? (stat.blocks ?? 0) * 512 : 0;
 					scanStats.files++;
 				} else if (item.isDirectory()) {
 					total += getDirSizeShallow(fullPath);
@@ -166,7 +167,9 @@ const rpc = BrowserView.defineRPC<{
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
 			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
+			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
+			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 		};
 		messages: {};
 	};
@@ -184,9 +187,22 @@ const rpc = BrowserView.defineRPC<{
 		requests: {
 			getCacheList: async () => {
 				const store = await loadCacheStore();
+				// Deduplica per rootPath (tieni solo la più recente)
+				const seen = new Set<string>();
+				const unique = store.entries.filter((e) => {
+					if (seen.has(e.rootPath)) return false;
+					seen.add(e.rootPath);
+					return true;
+				});
 				return {
-					entries: store.entries.map((e) => ({ rootPath: e.rootPath, timestamp: e.timestamp })),
+					entries: unique.map((e) => ({ rootPath: e.rootPath, timestamp: e.timestamp })),
 				};
+			},
+			deleteCacheEntry: async ({ rootPath }) => {
+				const store = await loadCacheStore();
+				store.entries = store.entries.filter((e) => e.rootPath !== rootPath);
+				saveCacheStore(store);
+				return { success: true };
 			},
 			scanDirectory: async ({ dirPath }) => {
 				const targetPath = expandPath(dirPath || "~");
@@ -246,6 +262,16 @@ const rpc = BrowserView.defineRPC<{
 				}
 				const tree = scanDirectory(resolved, 0, 1);
 				return { children: tree.children || [] };
+			},
+			validatePath: async ({ dirPath }) => {
+				try {
+					const resolved = expandPath(dirPath || "");
+					if (!resolved || !existsSync(resolved)) return { valid: false };
+					const stat = statSync(resolved, { throwIfNoEntry: false });
+					return { valid: !!stat?.isDirectory() };
+				} catch {
+					return { valid: false };
+				}
 			},
 			listDir: async ({ partial }) => {
 				try {

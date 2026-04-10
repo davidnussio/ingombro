@@ -19,6 +19,13 @@ export default {
 		copy: {
 			"src/mainview/index.html": "views/mainview/index.html",
 			"src/mainview/index.css": "views/mainview/index.css",
+			"src/assets/icon.png": "views/mainview/assets/icon.png",
+		},
+		win: {
+			icon: "assets/icon.ico",
+		},
+		linux: {
+			icon: "assets/icon.png",
 		},
 	},
 } satisfies ElectrobunConfig;

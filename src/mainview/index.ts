@@ -16,7 +16,9 @@ type AppRPC = {
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
 			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
+			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
+			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 		};
 		messages: {};
 	};
@@ -394,12 +396,15 @@ async function renderCacheList() {
 		const card = document.createElement("div");
 		card.className = "cache-card";
 		card.innerHTML = `
-			<span class="cache-card-path" title="${escapeAttr(entry.rootPath)}">${escapeHtml(entry.rootPath)}</span>
-			<div class="cache-card-row">
+			<div class="cache-card-info">
+				<span class="cache-card-path" title="${escapeAttr(entry.rootPath)}">${escapeHtml(entry.rootPath.replace(/\/$/, ""))}</span>
 				<span class="cache-card-date">${dateStr}</span>
+			</div>
+			<div class="cache-card-actions">
 				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">Apri cache</button>
 				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">Scansiona</button>
 			</div>
+			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="Rimuovi">×</button>
 		`;
 		container.appendChild(card);
 	}
@@ -428,6 +433,14 @@ async function renderCacheList() {
 			scanPathInput.value = path;
 			showScreen("scanning");
 			electrobun.rpc?.request?.scanDirectory({ dirPath: path });
+		});
+	});
+	container.querySelectorAll("[data-action='delete-cache']").forEach((btn) => {
+		btn.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			const path = (e.currentTarget as HTMLElement).dataset.path!;
+			await electrobun.rpc?.request?.deleteCacheEntry({ rootPath: path });
+			renderCacheList();
 		});
 	});
 }
@@ -466,8 +479,30 @@ window.addEventListener("resize", () => {
 
 // --- Autocomplete ---
 const acList = $("autocompleteList");
+const btnScan = $("btnScan") as HTMLButtonElement;
+const scanPathLabel = $("scanPathLabel");
 let acIndex = -1;
 let acDebounce: ReturnType<typeof setTimeout> | null = null;
+let validateDebounce: ReturnType<typeof setTimeout> | null = null;
+
+async function validatePath(dirPath: string) {
+	if (!dirPath.trim()) {
+		btnScan.disabled = true;
+		scanPathLabel.textContent = "Directory da scansionare";
+		scanPathLabel.style.color = "";
+		return;
+	}
+	const result = await electrobun.rpc?.request?.validatePath({ dirPath: dirPath.trim() });
+	if (result?.valid) {
+		btnScan.disabled = false;
+		scanPathLabel.textContent = "Directory da scansionare";
+		scanPathLabel.style.color = "";
+	} else {
+		btnScan.disabled = true;
+		scanPathLabel.textContent = "La directory non esiste";
+		scanPathLabel.style.color = "var(--danger)";
+	}
+}
 
 async function fetchSuggestions(partial: string) {
 	if (!partial || partial.length < 1) {
@@ -492,6 +527,7 @@ async function fetchSuggestions(partial: string) {
 				scanPathInput.value = s + "/";
 				acList.classList.add("hidden");
 				fetchSuggestions(s + "/");
+				validatePath(s + "/");
 			});
 			acList.appendChild(item);
 		}
@@ -502,16 +538,31 @@ async function fetchSuggestions(partial: string) {
 	}
 }
 
+const inputHint = $("inputHint");
+
 scanPathInput.addEventListener("input", () => {
+	inputHint.style.display = scanPathInput.value ? "none" : "";
 	if (acDebounce) clearTimeout(acDebounce);
+	if (validateDebounce) clearTimeout(validateDebounce);
 	acDebounce = setTimeout(() => {
 		fetchSuggestions(scanPathInput.value);
 	}, 120);
+	validateDebounce = setTimeout(() => {
+		validatePath(scanPathInput.value);
+	}, 250);
 });
 
 scanPathInput.addEventListener("keydown", (e) => {
 	const items = acList.querySelectorAll(".autocomplete-item");
 	const isOpen = !acList.classList.contains("hidden") && items.length > 0;
+
+	// Cmd+Enter (Mac) / Ctrl+Enter (other) → avvia scansione
+	if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+		e.preventDefault();
+		acList.classList.add("hidden");
+		if (!btnScan.disabled) btnScan.click();
+		return;
+	}
 
 	if (e.key === "Enter") {
 		if (isOpen && acIndex >= 0) {
@@ -521,6 +572,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 			scanPathInput.value = val + "/";
 			acList.classList.add("hidden");
 			fetchSuggestions(val + "/");
+			validatePath(val + "/");
 		} else {
 			// Close autocomplete and let the scan happen
 			acList.classList.add("hidden");
@@ -547,6 +599,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 		scanPathInput.value = val + "/";
 		acList.classList.add("hidden");
 		fetchSuggestions(val + "/");
+		validatePath(val + "/");
 	}
 });
 
