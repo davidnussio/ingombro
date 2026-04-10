@@ -8,6 +8,10 @@ on:
       tag:
         description: "Tag della release (es. v1.0.0)"
         required: true
+      prerelease:
+        description: "Pre-release (canary build)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -22,11 +26,25 @@ jobs:
           - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
 
+    env:
+      IS_PRERELEASE: ${{ github.event.release.prerelease || inputs.prerelease || false }}
+
     steps:
       - name: Checkout del codice
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+
+      - name: Allinea versione in package.json e electrobun.config.ts
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json && rm -f package.json.bak
+          sed -i.bak "s/version: \".*\"/version: \"$VERSION\"/" electrobun.config.ts && rm -f electrobun.config.ts.bak
+
+          echo "Versione allineata a: $VERSION"
 
       - name: Setup di Bun
         uses: oven-sh/setup-bun@v2
@@ -37,12 +55,19 @@ jobs:
         run: bun install
 
       - name: Build dell'app
-        run: bun run build:canary
+        run: |
+          if [[ "${{ env.IS_PRERELEASE }}" == "true" ]]; then
+            bun run build:canary
+          else
+            bun run build:stable
+          fi
+        shell: bash
 
       - name: Pubblica su GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.event.release.tag_name }}
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
