@@ -982,11 +982,14 @@ scanPathInput.addEventListener("keydown", (e) => {
 	const items = acList.querySelectorAll(".autocomplete-item");
 	const isOpen = !acList.classList.contains("hidden") && items.length > 0;
 
-	// Cmd+Enter (Mac) / Ctrl+Enter (other) → avvia scansione
+	// Cmd+Enter (Mac) / Ctrl+Enter (other) → avvia scansione direttamente
 	if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 		e.preventDefault();
 		acList.classList.add("hidden");
-		if (!btnScan.disabled) btnScan.click();
+		const dirPath = scanPathInput.value.trim();
+		if (dirPath) {
+			startScan(dirPath);
+		}
 		return;
 	}
 

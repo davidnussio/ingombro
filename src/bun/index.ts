@@ -39,9 +39,13 @@ let scanStats = { dirs: 0, files: 0, currentDir: "" };
 
 // --- Resolve ~ in paths ---
 function expandPath(p: string): string {
-	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
-	if (p === "~") return homedir();
-	return resolve(p);
+	let result: string;
+	if (p.startsWith("~/")) result = join(homedir(), p.slice(2));
+	else if (p === "~") result = homedir();
+	else result = resolve(p);
+	// Normalize: remove trailing slash (unless root "/")
+	if (result.length > 1 && result.endsWith("/")) result = result.slice(0, -1);
+	return result;
 }
 
 // --- App directory ---
