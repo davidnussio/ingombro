@@ -121,7 +121,7 @@ function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | null {
 }
 
 // --- Filesystem Scanner (async with progress) ---
-async function scanDirectoryAsync(dirPath: string, depth: number = 0, maxDepth: number = 3, sendProgress: () => Promise<void> = async () => {}): Promise<DirEntry> {
+async function scanDirectoryAsync(dirPath: string, depth: number = 0, maxDepth: number = 10, sendProgress: () => Promise<void> = async () => {}): Promise<DirEntry> {
 	const name = basename(dirPath) || dirPath;
 	const entry: DirEntry = { path: dirPath, name, size: 0, isDir: true, children: [] };
 
@@ -281,7 +281,7 @@ const rpc = BrowserView.defineRPC<{
 				console.log(`[scan] Starting scanDirectoryAsync...`);
 				const startTime = Date.now();
 				try {
-					const tree = await scanDirectoryAsync(targetPath, 0, 3, sendProgress);
+					const tree = await scanDirectoryAsync(targetPath, 0, 10, sendProgress);
 					const elapsed = Date.now() - startTime;
 					console.log(`[scan] Scan complete in ${elapsed}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
