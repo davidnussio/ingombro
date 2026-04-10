@@ -1,61 +1,43 @@
-# Ingombro v1.0.0 — First Release 🎉
-
-Ingombro is a macOS desktop app to analyze disk space and clean up unnecessary directories. Built with Electrobun and Bun.
+# Ingombro v0.2.0 — Enhanced Smart Clean 🧹
 
 ---
 
-## ✨ Features
+## ✨ What's New
 
-### Disk Analysis
-- Scan any directory and visualize disk usage with an interactive **treemap** rendered on Canvas
-- Proportional rectangles show relative sizes at a glance
-- Click any folder to drill down with smooth **transition animations**
+### Improved Smart Clean
+- Extended detection to **over 40 removable folder types**, organized by category: Node, Python, Rust, Java, Elixir, Zig, Ruby, PHP, Go, iOS, Flutter, build artifacts, infrastructure, AI/ML, design, video, music, macOS/Windows
+- **Tag filtering**: filter Smart Clean items by project type (e.g. Node only, Python only, etc.)
+- **Contextual navigation**: the Smart Clean banner and item list update as you navigate into subdirectories, showing only what's relevant to the current folder
+- Fixed batch selection with checkboxes
+- Fixed button layout
 
-### Navigation
-- **Clickable breadcrumb** to jump to any level in the directory tree
-- On-demand loading of subdirectories for fast scans even on large directory trees
+### General improvements
+- **Scan interruption handling**: scans can now be cleanly interrupted without leaving inconsistent state
+- **Updated translations** for all 7 supported languages
+- Migrated to native Bun APIs for filesystem operations
+- Various stability and UI fixes
 
-### File Preview
-- Side panel with file and folder details: size, dates, type distribution
-- Text and image preview support
-- File type distribution chart
+---
 
-### Smart Clean
-Automatic detection of removable folders in development projects:
+## 📋 Supported Smart Clean categories
 
-| Type | Detected folders |
+| Category | Detected folders |
 |---|---|
-| Node / Bun | `node_modules` |
-| Python | `__pycache__`, `.venv`, `venv`, `.tox` |
-| Rust | `target` |
-| iOS | `Pods` |
-| Build | `build`, `dist`, `.next`, `.nuxt` |
-| Cache | `.cache`, `.parcel-cache` |
-
-- Banner showing total recoverable space
-- Batch selection and removal with a single click
-- Freed space indicator with session-cumulative counter
-
-### Settings
-- Configurable max cache entries
-- Adjustable scan depth
-- Delete mode: macOS Trash or permanent deletion
-- Settings saved in `~/.ingombro/settings.json`
-
-### Internationalization
-7 languages supported out of the box:
-🇮🇹 Italiano · 🇬🇧 English · 🇪🇸 Español · 🇫🇷 Français · 🇩🇪 Deutsch · 🇧🇷 Português · 🇯🇵 日本語
-
-Automatic detection of system language with manual override.
-
----
-
-## 🛠 Tech Stack
-
-- **Runtime**: Bun
-- **Desktop framework**: Electrobun
-- **Language**: TypeScript
-- **UI**: Vanilla HTML/CSS + Canvas
+| Node / Bun | `node_modules`, `.parcel-cache`, `.turbo` |
+| Frameworks | `.next`, `.nuxt`, `.svelte-kit`, `.astro`, `.angular`, `.docusaurus` |
+| Python | `__pycache__`, `.venv`, `venv`, `.tox`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `htmlcov` |
+| Rust / Java | `target`, `.gradle` |
+| Elixir | `_build`, `deps`, `.elixir_ls` |
+| Zig / Haskell | `zig-cache`, `zig-out`, `.stack-work` |
+| Ruby / PHP / Go | `vendor`, `.bundle` |
+| iOS / Flutter | `Pods`, `.dart_tool`, `.pub-cache` |
+| Build artifacts | `build`, `dist`, `.cache` |
+| Infrastructure | `.terraform`, `.cdk.out`, `.serverless` |
+| AI / ML | `.ipynb_checkpoints`, `mlruns`, `wandb`, `lightning_logs` |
+| Design | `RECOVER`, `.affinity-autosave`, `Sketch Previews` |
+| Video | `Media Cache`, `Render Cache`, `Render Files`, `proxy` |
+| Music / DAW | `Bounced Files`, `Freeze Files`, `Rendered`, `fl_studio_cache` |
+| macOS / Windows | `.DS_Store`, `Thumbs.db`, `Desktop.ini` |
 
 ---
 
@@ -72,3 +54,22 @@ xattr -d com.apple.quarantine /Applications/Ingombro.app
 ## 📥 Installation
 
 Download the `.app` from the assets below and drag it into your Applications folder.
+
+---
+
+<details>
+<summary>v0.1.0 — First Release 🎉</summary>
+
+### Features
+- Scan any directory and visualize disk usage with an interactive **treemap** rendered on Canvas
+- Smooth **transition animations** when drilling down into folders
+- **Clickable breadcrumb** navigation
+- Side panel with file/folder details, text/image preview, type distribution chart
+- **Smart Clean**: automatic detection of removable project folders with batch removal
+- **Freed space indicator** with session-cumulative counter
+- **Path autocomplete** with `~` expansion
+- **Cached analysis results** for instant reload
+- **Settings**: max cache entries, scan depth, delete mode (Trash / permanent)
+- **7 languages**: 🇮🇹 🇬🇧 🇪🇸 🇫🇷 🇩🇪 🇧🇷 🇯🇵
+
+</details>
