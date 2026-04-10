@@ -14,7 +14,7 @@ const ja: Translations = {
 	backTitle: "戻る",
 	navigation: "ナビゲーション",
 
-	cleanAnalyzing: "プロジェクトを分析中…",
+	cleanAnalyzing: "ディレクトリを分析中…",
 	cleanRecoverable: (size, count) => `${count}個のプロジェクトフォルダから${size}を回収可能`,
 	cleanDetails: "詳細を表示",
 

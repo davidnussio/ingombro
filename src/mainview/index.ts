@@ -730,15 +730,16 @@ function buildCleanFilters() {
 		group.appendChild(label);
 
 		for (const folderName of folderNames) {
+			const filterKey = `${projectType}|${folderName}`;
 			const chip = document.createElement("button");
 			chip.className = "clean-filter-chip";
 			chip.textContent = `${folderName}`;
-			chip.dataset.folder = folderName;
+			chip.dataset.filterKey = filterKey;
 			chip.addEventListener("click", () => {
-				if (activeCleanFilters.has(folderName)) {
-					activeCleanFilters.delete(folderName);
+				if (activeCleanFilters.has(filterKey)) {
+					activeCleanFilters.delete(filterKey);
 				} else {
-					activeCleanFilters.add(folderName);
+					activeCleanFilters.add(filterKey);
 				}
 				syncFilterChipStates();
 				renderCleanList();
@@ -756,15 +757,15 @@ function syncFilterChipStates() {
 		allChip.classList.toggle("active", activeCleanFilters.size === 0);
 	}
 	container.querySelectorAll<HTMLElement>(".clean-filter-chip:not(.chip-all)").forEach((chip) => {
-		const folder = chip.dataset.folder || "";
-		chip.classList.toggle("active", activeCleanFilters.has(folder));
+		const key = chip.dataset.filterKey || "";
+		chip.classList.toggle("active", activeCleanFilters.has(key));
 	});
 }
 
 function getFilteredCleanItems(): CleanableItem[] {
 	if (!currentCleanables) return [];
 	if (activeCleanFilters.size === 0) return currentCleanables.items;
-	return currentCleanables.items.filter((i) => activeCleanFilters.has(i.folderName));
+	return currentCleanables.items.filter((i) => activeCleanFilters.has(`${i.projectType}|${i.folderName}`));
 }
 
 function renderCleanList() {

@@ -14,7 +14,7 @@ const it: Translations = {
 	backTitle: "Torna indietro",
 	navigation: "Navigazione",
 
-	cleanAnalyzing: "Analisi progetti in corso…",
+	cleanAnalyzing: "Analisi cartelle in corso…",
 	cleanRecoverable: (size, count) => `${size} recuperabili da ${count} cartell${count === 1 ? "a" : "e"} di progetto`,
 	cleanDetails: "Vedi dettagli",
 
