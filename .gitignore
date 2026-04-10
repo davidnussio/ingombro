@@ -145,3 +145,6 @@ dist
 
 build
 artifacts
+
+# MacOS
+.DS_Store
