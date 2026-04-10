@@ -181,6 +181,32 @@ function layoutStrip(
 }
 
 let treemapRects: TreemapRect[] = [];
+let treemapAnimId: number | null = null;
+let skipNextAnimation = false;
+
+function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number) {
+	for (const r of rects) {
+		ctx.fillStyle = r.color;
+		ctx.globalAlpha = 0.85 * alpha;
+		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, 4);
+		ctx.fill();
+		ctx.globalAlpha = alpha;
+
+		if (r.w > 50 && r.h > 28) {
+			ctx.fillStyle = `rgba(255,255,255,${0.9 * alpha})`;
+			ctx.font = "600 11px -apple-system, system-ui, sans-serif";
+			const label = truncateText(ctx, r.entry.name, r.w - 12);
+			ctx.fillText(label, r.x + 6, r.y + 16);
+
+			if (r.h > 40) {
+				ctx.fillStyle = `rgba(255,255,255,${0.55 * alpha})`;
+				ctx.font = "10px -apple-system, system-ui, sans-serif";
+				ctx.fillText(formatSize(r.entry.size), r.x + 6, r.y + 30);
+			}
+		}
+	}
+	ctx.globalAlpha = 1;
+}
 
 function renderTreemap(entries: DirEntry[]) {
 	const canvas = document.getElementById("treemapCanvas") as HTMLCanvasElement;
@@ -188,38 +214,86 @@ function renderTreemap(entries: DirEntry[]) {
 	const rect = container.getBoundingClientRect();
 	const dpr = window.devicePixelRatio || 1;
 
+	const prevRects = [...treemapRects];
+	const shouldAnimate = !skipNextAnimation && prevRects.length > 0;
+	skipNextAnimation = false;
+
+	// Capture previous frame before resizing canvas
+	let prevSnapshot: ImageBitmap | null = null;
+	if (shouldAnimate && canvas.width > 0 && canvas.height > 0) {
+		const offscreen = new OffscreenCanvas(canvas.width, canvas.height);
+		const offCtx = offscreen.getContext("2d")!;
+		offCtx.drawImage(canvas, 0, 0);
+		// Store as ImageData for sync drawing
+		prevSnapshot = null; // we'll use offscreen directly
+		var prevOffscreen = offscreen;
+		var prevW = parseFloat(canvas.style.width);
+		var prevH = parseFloat(canvas.style.height);
+	}
+
 	canvas.width = rect.width * dpr;
 	canvas.height = rect.height * dpr;
 	canvas.style.width = rect.width + "px";
 	canvas.style.height = rect.height + "px";
 
 	const ctx = canvas.getContext("2d")!;
-	ctx.scale(dpr, dpr);
-	ctx.clearRect(0, 0, rect.width, rect.height);
 
 	const topEntries = entries.filter((e) => e.size > 0).slice(0, 40);
 	treemapRects = squarify(topEntries, 2, 2, rect.width - 4, rect.height - 4);
 
-	for (const r of treemapRects) {
-		ctx.fillStyle = r.color;
-		ctx.globalAlpha = 0.85;
-		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, 4);
-		ctx.fill();
-		ctx.globalAlpha = 1;
+	if (!shouldAnimate) {
+		ctx.scale(dpr, dpr);
+		ctx.clearRect(0, 0, rect.width, rect.height);
+		drawTreemapFrame(ctx, treemapRects, 1);
+		return;
+	}
 
-		if (r.w > 50 && r.h > 28) {
-			ctx.fillStyle = "rgba(255,255,255,0.9)";
-			ctx.font = "600 11px -apple-system, system-ui, sans-serif";
-			const label = truncateText(ctx, r.entry.name, r.w - 12);
-			ctx.fillText(label, r.x + 6, r.y + 16);
+	// Animate crossfade
+	if (treemapAnimId) cancelAnimationFrame(treemapAnimId);
+	const duration = 250;
+	const start = performance.now();
 
-			if (r.h > 40) {
-				ctx.fillStyle = "rgba(255,255,255,0.55)";
-				ctx.font = "10px -apple-system, system-ui, sans-serif";
-				ctx.fillText(formatSize(r.entry.size), r.x + 6, r.y + 30);
-			}
+	function animateFrame(now: number) {
+		const elapsed = now - start;
+		const t = Math.min(elapsed / duration, 1);
+		// Ease out cubic
+		const ease = 1 - Math.pow(1 - t, 3);
+
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+		// Draw old frame fading out
+		if (prevOffscreen) {
+			ctx.globalAlpha = 1 - ease;
+			ctx.drawImage(prevOffscreen, 0, 0, prevOffscreen.width, prevOffscreen.height, 0, 0, canvas.width, canvas.height);
+			ctx.globalAlpha = 1;
+		}
+
+		// Draw new frame fading in with slight scale
+		ctx.save();
+		ctx.scale(dpr, dpr);
+		const scale = 0.97 + 0.03 * ease;
+		const cx = rect.width / 2;
+		const cy = rect.height / 2;
+		ctx.translate(cx, cy);
+		ctx.scale(scale, scale);
+		ctx.translate(-cx, -cy);
+		drawTreemapFrame(ctx, treemapRects, ease);
+		ctx.restore();
+
+		if (t < 1) {
+			treemapAnimId = requestAnimationFrame(animateFrame);
+		} else {
+			treemapAnimId = null;
+			// Final clean render
+			ctx.setTransform(1, 0, 0, 1, 0, 0);
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			ctx.scale(dpr, dpr);
+			drawTreemapFrame(ctx, treemapRects, 1);
 		}
 	}
+
+	treemapAnimId = requestAnimationFrame(animateFrame);
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -284,9 +358,34 @@ treemapCanvas.addEventListener("click", (e) => {
 });
 
 // --- Render results ---
+function renderBreadcrumb() {
+	const nav = $("breadcrumb");
+	nav.innerHTML = "";
+	for (let i = 0; i < navigationStack.length; i++) {
+		if (i > 0) {
+			const sep = document.createElement("span");
+			sep.className = "breadcrumb-sep";
+			sep.textContent = "›";
+			nav.appendChild(sep);
+		}
+		const crumb = document.createElement("span");
+		crumb.className = "breadcrumb-item" + (i === navigationStack.length - 1 ? " current" : "");
+		crumb.textContent = navigationStack[i]!.name;
+		crumb.title = navigationStack[i]!.path;
+		if (i < navigationStack.length - 1) {
+			const idx = i;
+			crumb.addEventListener("click", () => {
+				navigationStack = navigationStack.slice(0, idx + 1);
+				renderResults(navigationStack[navigationStack.length - 1]!);
+			});
+		}
+		nav.appendChild(crumb);
+	}
+}
+
 function renderResults(entry: DirEntry) {
-	$("currentPath").textContent = entry.name;
 	$("totalSize").textContent = formatSize(entry.size);
+	renderBreadcrumb();
 
 	const children = (entry.children || []).filter((c) => c.size > 0);
 	renderTreemap(children);
@@ -473,6 +572,7 @@ window.addEventListener("resize", () => {
 	if (currentTree && navigationStack.length > 0) {
 		const current = navigationStack[navigationStack.length - 1]!;
 		const children = (current.children || []).filter((c) => c.size > 0);
+		skipNextAnimation = true;
 		renderTreemap(children);
 	}
 });
