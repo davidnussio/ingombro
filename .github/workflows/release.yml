@@ -22,8 +22,8 @@ jobs:
       matrix:
         include:
           - os: macos-14
-          - os: windows-latest
-          - os: ubuntu-latest
+          # - os: windows-latest
+          # - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
 
     env:
