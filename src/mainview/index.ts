@@ -511,8 +511,11 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 		const colorIdx = entries.indexOf(entry);
 		const item = document.createElement("div");
 		item.className = "dir-item";
+		const dirIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+		const fileIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+		const trashIcon = `<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 		item.innerHTML = `
-			<div class="dir-item-icon">${entry.isDir ? "📁" : "📄"}</div>
+			<div class="dir-item-icon">${entry.isDir ? dirIcon : fileIcon}</div>
 			<div class="dir-item-info">
 				<div class="dir-item-name">${escapeHtml(entry.name)}</div>
 				<div class="dir-item-path">${escapeHtml(entry.path)}</div>
@@ -522,7 +525,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			</div>
 			<div class="dir-item-size">${formatSize(entry.size)}</div>
 			<div class="dir-item-actions">
-				<button class="btn-delete" data-path="${escapeAttr(entry.path)}" data-name="${escapeAttr(entry.name)}" data-size="${entry.size}">Elimina</button>
+				<button class="btn-delete" data-path="${escapeAttr(entry.path)}" data-name="${escapeAttr(entry.name)}" data-size="${entry.size}">${trashIcon}</button>
 			</div>
 		`;
 
@@ -626,7 +629,7 @@ async function renderCacheList() {
 				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">Apri cache</button>
 				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">Scansiona</button>
 			</div>
-			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="Rimuovi">×</button>
+			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="Rimuovi"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 		`;
 		container.appendChild(card);
 	}
