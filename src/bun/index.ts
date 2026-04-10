@@ -25,11 +25,13 @@ interface CacheData {
 interface AppSettings {
 	maxCacheEntries: number;
 	deleteMode: "trash" | "permanent";
+	maxDepth: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
 	maxCacheEntries: 10,
 	deleteMode: "trash",
+	maxDepth: 10,
 };
 
 // --- Progress tracking ---
@@ -222,7 +224,7 @@ const rpc = BrowserView.defineRPC<{
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 			getSettings: { params: {}; response: AppSettings };
-			saveSettings: { params: { maxCacheEntries: number; deleteMode: string }; response: { success: boolean } };
+			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -278,10 +280,11 @@ const rpc = BrowserView.defineRPC<{
 					}
 				};
 
-				console.log(`[scan] Starting scanDirectoryAsync...`);
+				const settings = await loadSettings();
+				console.log(`[scan] Starting scanDirectoryAsync (maxDepth=${settings.maxDepth})...`);
 				const startTime = Date.now();
 				try {
-					const tree = await scanDirectoryAsync(targetPath, 0, 10, sendProgress);
+					const tree = await scanDirectoryAsync(targetPath, 0, settings.maxDepth, sendProgress);
 					const elapsed = Date.now() - startTime;
 					console.log(`[scan] Scan complete in ${elapsed}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
@@ -406,10 +409,11 @@ const rpc = BrowserView.defineRPC<{
 			getSettings: async () => {
 				return await loadSettings();
 			},
-			saveSettings: async ({ maxCacheEntries, deleteMode }) => {
+			saveSettings: async ({ maxCacheEntries, deleteMode, maxDepth }) => {
 				const settings: AppSettings = {
 					maxCacheEntries: Math.max(1, Math.min(50, maxCacheEntries)),
 					deleteMode: deleteMode === "permanent" ? "permanent" : "trash",
+					maxDepth: Math.max(1, Math.min(30, maxDepth)),
 				};
 				await saveSettings(settings);
 				// Trim cache if needed

@@ -19,8 +19,8 @@ type AppRPC = {
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
-			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string } };
-			saveSettings: { params: { maxCacheEntries: number; deleteMode: string }; response: { success: boolean } };
+			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string; maxDepth: number } };
+			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -874,6 +874,7 @@ scanPathInput.addEventListener("focus", () => {
 
 // --- Settings ---
 const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
+const settingMaxDepth = $("settingMaxDepth") as HTMLInputElement;
 const settingDeleteMode = $("settingDeleteMode") as HTMLSelectElement;
 let settingsSaveDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -881,6 +882,7 @@ async function loadSettingsUI() {
 	const settings = await electrobun.rpc?.request?.getSettings({});
 	if (settings) {
 		settingMaxCache.value = String(settings.maxCacheEntries);
+		settingMaxDepth.value = String(settings.maxDepth);
 		settingDeleteMode.value = settings.deleteMode;
 	}
 }
@@ -891,12 +893,15 @@ function saveSettingsDebounced() {
 		await electrobun.rpc?.request?.saveSettings({
 			maxCacheEntries: Number(settingMaxCache.value) || 10,
 			deleteMode: settingDeleteMode.value,
+			maxDepth: Number(settingMaxDepth.value) || 10,
 		});
 	}, 400);
 }
 
 settingMaxCache.addEventListener("change", saveSettingsDebounced);
 settingMaxCache.addEventListener("input", saveSettingsDebounced);
+settingMaxDepth.addEventListener("change", saveSettingsDebounced);
+settingMaxDepth.addEventListener("input", saveSettingsDebounced);
 settingDeleteMode.addEventListener("change", saveSettingsDebounced);
 
 // --- Init ---
