@@ -260,6 +260,7 @@ body {
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
+	min-width: 250px;
 }
 .setting-row {
 	display: flex;

@@ -1,5 +1,5 @@
 import Electrobun, { Electroview } from "electrobun/view";
-import { initI18n, t, setLanguage, getLanguage, getAvailableLanguages } from "./i18n";
+import { initI18n, t, setLanguage, getLanguage, getLocale, getAvailableLanguages } from "./i18n";
 
 // Initialize i18n before anything else
 initI18n();
@@ -193,7 +193,10 @@ function formatSize(bytes: number): string {
 	const units = ["B", "KB", "MB", "GB", "TB"];
 	const i = Math.floor(Math.log(bytes) / Math.log(1024));
 	const val = bytes / Math.pow(1024, i);
-	return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+	const formatted = new Intl.NumberFormat(getLocale(), {
+		maximumFractionDigits: i > 0 ? 1 : 0,
+	}).format(val);
+	return `${formatted} ${units[i]}`;
 }
 
 // --- Color palette for treemap ---
@@ -798,10 +801,9 @@ async function renderCacheList() {
 		return;
 	}
 	container.classList.remove("hidden");
-	const dateLang = getLanguage() === "it" ? "it-IT" : "en-US";
 	for (const entry of result.entries) {
 		const date = new Date(entry.timestamp);
-		const dateStr = date.toLocaleDateString(dateLang, {
+		const dateStr = date.toLocaleDateString(getLocale(), {
 			day: "numeric", month: "short",
 			hour: "2-digit", minute: "2-digit",
 		});
@@ -1207,8 +1209,7 @@ function closeInfoPanel() {
 
 function formatDate(ms: number): string {
 	const d = new Date(ms);
-	const dateLang = getLanguage() === "it" ? "it-IT" : "en-US";
-	return d.toLocaleDateString(dateLang, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+	return d.toLocaleDateString(getLocale(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function renderInfoPanelContent(info: EntryInfo) {

@@ -11,6 +11,16 @@ import ja from "./i18n/ja";
 
 const translations: Record<string, Translations> = { it, en, es, fr, de, pt, ja };
 
+const localeMap: Record<string, string> = {
+	it: "it-IT",
+	en: "en-US",
+	es: "es-ES",
+	fr: "fr-FR",
+	de: "de-DE",
+	pt: "pt-BR",
+	ja: "ja-JP",
+};
+
 let currentLang: string = "it";
 let currentTranslations: Translations = it;
 
@@ -27,6 +37,10 @@ export function setLanguage(lang: string) {
 
 export function getLanguage(): string {
 	return currentLang;
+}
+
+export function getLocale(): string {
+	return localeMap[currentLang] || "en-US";
 }
 
 export function t(): Translations {
