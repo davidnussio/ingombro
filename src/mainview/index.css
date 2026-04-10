@@ -726,8 +726,8 @@ body {
 
 /* Smart Clean modal */
 .modal-card-lg {
-	max-width: 580px;
-	width: 94%;
+	max-width: 680px;
+	width: 96%;
 	max-height: 80vh;
 	display: flex;
 	flex-direction: column;
@@ -849,6 +849,39 @@ body {
 	border-radius: 10px;
 	white-space: nowrap;
 	flex-shrink: 0;
+}
+/* Risk badge */
+.clean-item-risk {
+	font-size: 9px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	padding: 1px 6px;
+	border-radius: 8px;
+	border: 1px solid;
+	white-space: nowrap;
+	flex-shrink: 0;
+	background: rgba(255,255,255,0.03);
+}
+/* Category badge */
+.clean-item-cat {
+	font-size: 9px;
+	font-weight: 600;
+	color: var(--text-muted);
+	background: rgba(108, 92, 231, 0.1);
+	padding: 1px 6px;
+	border-radius: 8px;
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+/* Note line */
+.clean-item-note {
+	font-size: 10px;
+	color: #fdcb6e;
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .btn-danger .icon {
 	margin-right: 4px;

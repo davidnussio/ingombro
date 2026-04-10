@@ -19,6 +19,9 @@ interface CleanableItem {
 	projectType: string;
 	folderName: string;
 	size: number;
+	risk: "low" | "medium" | "high";
+	category: "dev" | "ml" | "office" | "design" | "video" | "music";
+	note?: string;
 }
 
 interface CleanableResult {
@@ -621,12 +624,37 @@ function escapeAttr(s: string): string {
 
 // --- Smart Clean ---
 const PROJECT_ICONS: Record<string, string> = {
-	"Node / Bun": "📦",
-	Python: "🐍",
-	Rust: "🦀",
-	iOS: "🍎",
-	"Build artifacts": "🔨",
-	Cache: "🗄️",
+	"Node / Bun": "📦", Python: "🐍", Rust: "🦀", iOS: "🍎",
+	"Build artifacts": "🔨", Cache: "🗄️", "Cache generico": "🗄️",
+	Parcel: "📦", Monorepo: "📦", "Test artifacts": "🧪", Storybook: "📖",
+	"Next.js": "▲", Nuxt: "💚", SvelteKit: "🔥", Astro: "🚀",
+	Remix: "💿", Angular: "🅰️", Docusaurus: "🦖", MkDocs: "📝",
+	"Rust / Maven": "🦀", "Java/Maven": "☕", "Java/Kotlin": "☕",
+	Ruby: "💎", Elixir: "💧", Zig: "⚡", Haskell: "λ",
+	Terraform: "🏗️", "AWS CDK": "☁️", Serverless: "⚡",
+	"Dart/Flutter": "🎯",
+	// ML
+	Jupyter: "📓", MLflow: "🧪", "Weights & Biases": "📊", "PyTorch Lightning": "⚡",
+	// Office
+	Windows: "🪟", macOS: "🍎",
+	// Design
+	Illustrator: "🎨", Affinity: "🎨", Sketch: "💎",
+	// Video
+	"Premiere Pro": "🎬", "DaVinci Resolve": "🎬", "Final Cut Pro": "🎬", "Multi-app": "🎬",
+	// Music
+	"Logic Pro": "🎵", "Logic / Pro Tools": "🎵", "Ableton Live": "🎵", "FL Studio": "🎵",
+	// Vendor
+	Go: "🐹", PHP: "🐘",
+};
+
+const RISK_BADGES: Record<string, { label: string; color: string }> = {
+	low:    { label: "low",    color: "#55efc4" },
+	medium: { label: "medium", color: "#fdcb6e" },
+	high:   { label: "high",   color: "#e74c3c" },
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+	dev: "Dev", ml: "ML/AI", office: "Office", design: "Design", video: "Video", music: "Music",
 };
 
 async function detectAndShowCleanables(rootPath: string) {
@@ -662,20 +690,31 @@ function openCleanModal() {
 	const list = $("cleanList");
 
 	$("cleanTotalBadge").textContent = formatSize(currentCleanables.totalSize);
-	cleanableSelected = new Set(currentCleanables.items.map((i) => i.path));
+	// Pre-select only low/medium risk items; high risk unchecked by default
+	cleanableSelected = new Set(currentCleanables.items.filter((i) => i.risk !== "high").map((i) => i.path));
 
 	list.innerHTML = "";
 	for (const item of currentCleanables.items) {
 		const icon = PROJECT_ICONS[item.projectType] || "📁";
+		const riskInfo = RISK_BADGES[item.risk] || RISK_BADGES.low;
+		const catLabel = CATEGORY_LABELS[item.category] || item.category;
 		const row = document.createElement("label");
 		row.className = "clean-item";
+		let noteHtml = "";
+		if (item.note) {
+			noteHtml = `<div class="clean-item-note" title="${escapeAttr(item.note)}">⚠ ${escapeHtml(item.note)}</div>`;
+		}
+		const isChecked = cleanableSelected.has(item.path);
 		row.innerHTML = `
-			<input type="checkbox" checked data-path="${escapeAttr(item.path)}" />
+			<input type="checkbox" ${isChecked ? "checked" : ""} data-path="${escapeAttr(item.path)}" />
 			<div class="clean-item-icon">${icon}</div>
 			<div class="clean-item-info">
 				<div class="clean-item-project">${escapeHtml(item.projectPath)}</div>
 				<div class="clean-item-detail">${escapeHtml(item.folderName)}</div>
+				${noteHtml}
 			</div>
+			<span class="clean-item-cat">${escapeHtml(catLabel)}</span>
+			<span class="clean-item-risk" style="color:${riskInfo.color};border-color:${riskInfo.color}">${riskInfo.label}</span>
 			<div class="clean-item-type">${escapeHtml(item.projectType)}</div>
 			<div class="clean-item-size">${formatSize(item.size)}</div>
 		`;
