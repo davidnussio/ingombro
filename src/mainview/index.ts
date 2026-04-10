@@ -63,6 +63,9 @@ const electrobun = new Electrobun.Electroview({ rpc });
 let currentTree: DirEntry | null = null;
 let navigationStack: DirEntry[] = [];
 let pendingDeletePath: string | null = null;
+let pendingDeleteSize: number = 0;
+let totalFreedBytes: number = 0;
+let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // --- DOM ---
 const $ = (id: string) => document.getElementById(id)!;
@@ -434,8 +437,9 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			e.stopPropagation();
 			const el = e.currentTarget as HTMLElement;
 			pendingDeletePath = el.dataset.path || null;
+			pendingDeleteSize = Number(el.dataset.size || 0);
 			const name = el.dataset.name || "";
-			const size = Number(el.dataset.size || 0);
+			const size = pendingDeleteSize;
 			$("deleteMessage").textContent = `Sei sicuro di voler eliminare "${name}" (${formatSize(size)})? Questa azione è irreversibile.`;
 			$("modal-delete").classList.remove("hidden");
 		});
@@ -548,24 +552,60 @@ async function renderCacheList() {
 $("btnCancelDelete").addEventListener("click", () => {
 	$("modal-delete").classList.add("hidden");
 	pendingDeletePath = null;
+	pendingDeleteSize = 0;
 });
 
 $("modal-delete").querySelector(".modal-backdrop")!.addEventListener("click", () => {
 	$("modal-delete").classList.add("hidden");
 	pendingDeletePath = null;
+	pendingDeleteSize = 0;
 });
 
 $("btnConfirmDelete").addEventListener("click", async () => {
 	if (!pendingDeletePath) return;
 	$("modal-delete").classList.add("hidden");
 	const path = pendingDeletePath;
+	const deletedSize = pendingDeleteSize;
 	pendingDeletePath = null;
+	pendingDeleteSize = 0;
 
 	const result = await electrobun.rpc?.request?.deleteEntry({ entryPath: path });
 	if (result && !result.success) {
 		alert("Errore durante l'eliminazione: " + (result.error || "sconosciuto"));
+	} else {
+		totalFreedBytes += deletedSize;
+		showFreedToast(deletedSize);
 	}
 });
+
+// --- Freed space toast ---
+function showFreedToast(justFreed: number) {
+	const toast = $("freedToast");
+	const justEl = $("freedJust");
+	const totalEl = $("freedTotal");
+	const totalRow = $("freedTotalRow");
+
+	justEl.textContent = formatSize(justFreed);
+	if (totalFreedBytes > justFreed) {
+		totalEl.textContent = formatSize(totalFreedBytes);
+		totalRow.classList.remove("hidden");
+	} else {
+		totalRow.classList.add("hidden");
+	}
+
+	toast.classList.remove("hidden");
+	toast.classList.remove("toast-exit");
+	// Force reflow for re-trigger
+	void toast.offsetWidth;
+	toast.classList.add("toast-enter");
+
+	if (toastTimeout) clearTimeout(toastTimeout);
+	toastTimeout = setTimeout(() => {
+		toast.classList.remove("toast-enter");
+		toast.classList.add("toast-exit");
+		setTimeout(() => toast.classList.add("hidden"), 300);
+	}, 3000);
+}
 
 // --- Resize handler ---
 window.addEventListener("resize", () => {
