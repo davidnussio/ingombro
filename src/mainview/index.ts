@@ -59,6 +59,8 @@ type AppRPC = {
 			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string; maxDepth: number } };
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
+			getCachedCleanables: { params: { rootPath: string }; response: { found: boolean; cleanables?: CleanableResult } };
+			saveCachedCleanables: { params: { rootPath: string; cleanables: CleanableResult }; response: { success: boolean } };
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo };
 			cancelScan: { params: {}; response: { success: boolean } };
@@ -152,7 +154,7 @@ async function startScan(dirPath: string) {
 			return;
 		}
 		await loadTreeFromCache(result.rootPath, false);
-		detectAndShowCleanables(result.rootPath);
+		detectAndShowCleanables(result.rootPath, false);
 	} catch (e) {
 		console.error(`[fe] startScan error:`, e);
 		isScanning = false;
@@ -652,7 +654,7 @@ function escapeAttr(s: string): string {
 }
 
 // --- Smart Clean ---
-async function detectAndShowCleanables(rootPath: string) {
+async function detectAndShowCleanables(rootPath: string, useCache: boolean = true) {
 	const banner = $("cleanBanner");
 	banner.classList.remove("hidden");
 	banner.classList.add("clean-banner-scanning");
@@ -660,10 +662,26 @@ async function detectAndShowCleanables(rootPath: string) {
 	$("btnOpenClean").classList.add("hidden");
 
 	try {
+		// Try cached cleanables first (only when opening from cache, not after a new scan)
+		if (useCache) {
+			const cached = await electrobun.rpc?.request?.getCachedCleanables({ rootPath });
+			if (cached?.found && cached.cleanables && cached.cleanables.items.length > 0) {
+				currentCleanables = cached.cleanables;
+				cleanableSelected = new Set(cached.cleanables.items.map((i) => i.path));
+				banner.classList.remove("clean-banner-scanning");
+				const count = cached.cleanables.items.length;
+				$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(cached.cleanables.totalSize), count);
+				$("btnOpenClean").classList.remove("hidden");
+				return;
+			}
+		}
+
 		const result = await electrobun.rpc?.request?.detectCleanables({ rootPath });
 		if (!result || result.items.length === 0) {
 			banner.classList.add("hidden");
 			currentCleanables = null;
+			// Save empty result to cache so we don't re-scan next time
+			await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: { items: [], totalSize: 0 } });
 			return;
 		}
 		currentCleanables = result;
@@ -672,6 +690,8 @@ async function detectAndShowCleanables(rootPath: string) {
 		const count = result.items.length;
 		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), count);
 		$("btnOpenClean").classList.remove("hidden");
+		// Save to cache for next time
+		await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: result });
 	} catch (e) {
 		console.error("[cleanables] detection error:", e);
 		banner.classList.add("hidden");
@@ -867,7 +887,7 @@ $("btnConfirmClean").addEventListener("click", async () => {
 			}
 			if (currentTree) {
 				await loadTreeFromCache(currentTree.path, true);
-				detectAndShowCleanables(currentTree.path);
+				detectAndShowCleanables(currentTree.path, false);
 			}
 		}
 	} catch (e) {

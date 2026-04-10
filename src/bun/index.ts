@@ -17,6 +17,7 @@ interface CacheEntry {
 	timestamp: number;
 	rootPath: string;
 	tree: DirEntry;
+	cleanables?: CleanableResult;
 }
 
 interface CacheData {
@@ -738,6 +739,8 @@ const rpc = BrowserView.defineRPC<{
 			getSettings: { params: {}; response: AppSettings };
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
+			getCachedCleanables: { params: { rootPath: string }; response: { found: boolean; cleanables?: CleanableResult } };
+			saveCachedCleanables: { params: { rootPath: string; cleanables: CleanableResult }; response: { success: boolean } };
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo | { error: string } };
 			cancelScan: { params: {}; response: { success: boolean } };
@@ -810,6 +813,7 @@ const rpc = BrowserView.defineRPC<{
 					const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
 					console.log(`[scan] Scan complete in ${elapsedMs.toFixed(2)}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
+					// New scan: don't carry over old cleanables — they'll be re-detected
 					const store = await loadCacheStore();
 					saveCacheStore(await upsertCacheEntry(store, entry));
 					console.log(`[scan] === RETURNING RESPONSE ===`);
@@ -959,6 +963,28 @@ const rpc = BrowserView.defineRPC<{
 				const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
 				console.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${elapsedMs.toFixed(2)}ms`);
 				return result;
+			},
+			getCachedCleanables: async ({ rootPath }) => {
+				const resolved = expandPath(rootPath);
+				const store = await loadCacheStore();
+				const entry = findCacheEntry(store, resolved);
+				if (entry?.cleanables) {
+					console.log(`[cleanables] Cache hit for ${resolved} (${entry.cleanables.items.length} items)`);
+					return { found: true, cleanables: entry.cleanables };
+				}
+				return { found: false };
+			},
+			saveCachedCleanables: async ({ rootPath, cleanables }) => {
+				const resolved = expandPath(rootPath);
+				const store = await loadCacheStore();
+				const entry = findCacheEntry(store, resolved);
+				if (entry) {
+					entry.cleanables = cleanables;
+					saveCacheStore(store);
+					console.log(`[cleanables] Saved to cache for ${resolved} (${cleanables.items.length} items)`);
+					return { success: true };
+				}
+				return { success: false };
 			},
 			batchDelete: async ({ paths }) => {
 				const settings = await loadSettings();
