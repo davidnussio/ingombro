@@ -9,12 +9,15 @@ on:
         description: "Tag della release (es. v1.0.0)"
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     strategy:
       matrix:
         include:
-          - os: macos-14 # Consigliato per Apple Silicon
+          - os: macos-14
           - os: windows-latest
           - os: ubuntu-latest
     runs-on: ${{ matrix.os }}
@@ -23,7 +26,7 @@ jobs:
       - name: Checkout del codice
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup di Bun
         uses: oven-sh/setup-bun@v2
@@ -39,8 +42,7 @@ jobs:
       - name: Pubblica su GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.event.release.tag_name }}
+          tag_name: ${{ inputs.tag || github.event.release.tag_name }}
           files: artifacts/*
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
