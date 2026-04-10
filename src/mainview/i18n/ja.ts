@@ -71,6 +71,8 @@ const ja: Translations = {
 	notFound: "見つかりません",
 	cannotReadInfo: "情報を読み取れませんでした",
 
+	filterAll: "すべて",
+
 	typeCode: "コード",
 	typeImages: "画像",
 	typeDocuments: "ドキュメント",

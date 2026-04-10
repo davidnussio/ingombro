@@ -796,6 +796,51 @@ body {
 	gap: 2px;
 	max-height: 400px;
 }
+
+/* Clean tag filters */
+.clean-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 10px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--border);
+}
+.clean-filter-group {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.clean-filter-group-label {
+	font-size: 10px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	margin-right: 2px;
+}
+.clean-filter-chip {
+	font-size: 10px;
+	padding: 2px 8px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: all 0.15s;
+	font-family: inherit;
+}
+.clean-filter-chip:hover {
+	background: rgba(255,255,255,0.06);
+	color: var(--text);
+}
+.clean-filter-chip.active {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: white;
+}
+.clean-filter-chip.chip-all {
+	font-weight: 600;
+}
 .clean-item {
 	display: flex;
 	align-items: center;

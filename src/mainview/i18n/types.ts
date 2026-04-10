@@ -81,6 +81,9 @@ export interface Translations {
 	notFound: string;
 	cannotReadInfo: string;
 
+	// Clean filters
+	filterAll: string;
+
 	// Type categories
 	typeCode: string;
 	typeImages: string;

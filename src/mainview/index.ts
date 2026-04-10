@@ -110,6 +110,7 @@ let totalFreedBytes: number = 0;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let currentCleanables: CleanableResult | null = null;
 let cleanableSelected: Set<string> = new Set();
+let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
 let isScanning = false;
 
 // --- Cancel scan ---
@@ -681,14 +682,97 @@ async function detectAndShowCleanables(rootPath: string) {
 function openCleanModal() {
 	if (!currentCleanables || currentCleanables.items.length === 0) return;
 	const modal = $("modal-clean");
-	const list = $("cleanList");
 
 	$("cleanTotalBadge").textContent = formatSize(currentCleanables.totalSize);
 	// Pre-select only low/medium risk items; high risk unchecked by default
 	cleanableSelected = new Set(currentCleanables.items.filter((i) => i.risk !== "high").map((i) => i.path));
+	activeCleanFilters = new Set(); // reset filters
 
-	list.innerHTML = "";
+	buildCleanFilters();
+	renderCleanList();
+
+	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
+	updateCleanSelection();
+	modal.classList.remove("hidden");
+}
+
+function buildCleanFilters() {
+	const container = $("cleanFilters");
+	container.innerHTML = "";
+	if (!currentCleanables) return;
+
+	// Collect unique tags: group by projectType → set of folderNames
+	const tagMap = new Map<string, Set<string>>();
 	for (const item of currentCleanables.items) {
+		if (!tagMap.has(item.projectType)) tagMap.set(item.projectType, new Set());
+		tagMap.get(item.projectType)!.add(item.folderName);
+	}
+
+	// "All" chip
+	const allChip = document.createElement("button");
+	allChip.className = "clean-filter-chip chip-all active";
+	allChip.textContent = t().filterAll;
+	allChip.addEventListener("click", () => {
+		activeCleanFilters.clear();
+		syncFilterChipStates();
+		renderCleanList();
+	});
+	container.appendChild(allChip);
+
+	// One chip per unique folderName, grouped visually by projectType
+	for (const [projectType, folderNames] of tagMap) {
+		const group = document.createElement("span");
+		group.className = "clean-filter-group";
+
+		const label = document.createElement("span");
+		label.className = "clean-filter-group-label";
+		label.textContent = projectType + ":";
+		group.appendChild(label);
+
+		for (const folderName of folderNames) {
+			const chip = document.createElement("button");
+			chip.className = "clean-filter-chip";
+			chip.textContent = `${folderName}`;
+			chip.dataset.folder = folderName;
+			chip.addEventListener("click", () => {
+				if (activeCleanFilters.has(folderName)) {
+					activeCleanFilters.delete(folderName);
+				} else {
+					activeCleanFilters.add(folderName);
+				}
+				syncFilterChipStates();
+				renderCleanList();
+			});
+			group.appendChild(chip);
+		}
+		container.appendChild(group);
+	}
+}
+
+function syncFilterChipStates() {
+	const container = $("cleanFilters");
+	const allChip = container.querySelector(".chip-all") as HTMLElement;
+	if (allChip) {
+		allChip.classList.toggle("active", activeCleanFilters.size === 0);
+	}
+	container.querySelectorAll<HTMLElement>(".clean-filter-chip:not(.chip-all)").forEach((chip) => {
+		const folder = chip.dataset.folder || "";
+		chip.classList.toggle("active", activeCleanFilters.has(folder));
+	});
+}
+
+function getFilteredCleanItems(): CleanableItem[] {
+	if (!currentCleanables) return [];
+	if (activeCleanFilters.size === 0) return currentCleanables.items;
+	return currentCleanables.items.filter((i) => activeCleanFilters.has(i.folderName));
+}
+
+function renderCleanList() {
+	const list = $("cleanList");
+	list.innerHTML = "";
+	const items = getFilteredCleanItems();
+
+	for (const item of items) {
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
 		const isChecked = cleanableSelected.has(item.path);
@@ -713,14 +797,12 @@ function openCleanModal() {
 		});
 		list.appendChild(row);
 	}
-
-	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
 	updateCleanSelection();
-	modal.classList.remove("hidden");
 }
 
 function updateCleanSelection() {
 	if (!currentCleanables) return;
+	const visibleItems = getFilteredCleanItems();
 	const selectedItems = currentCleanables.items.filter((i) => cleanableSelected.has(i.path));
 	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
 	const count = selectedItems.length;
@@ -731,18 +813,21 @@ function updateCleanSelection() {
 	$("btnConfirmCleanText").textContent = count > 0 ? t().cleanSelectedWithSize(formatSize(totalSelected)) : t().cleanSelectedWithSize("");
 
 	const selectAll = document.getElementById("cleanSelectAll") as HTMLInputElement;
-	selectAll.checked = count === currentCleanables.items.length;
-	selectAll.indeterminate = count > 0 && count < currentCleanables.items.length;
+	const visibleSelected = visibleItems.filter((i) => cleanableSelected.has(i.path)).length;
+	selectAll.checked = visibleItems.length > 0 && visibleSelected === visibleItems.length;
+	selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visibleItems.length;
 }
 
 $("cleanSelectAll").addEventListener("change", () => {
 	const checked = (document.getElementById("cleanSelectAll") as HTMLInputElement).checked;
 	if (!currentCleanables) return;
+	const visibleItems = getFilteredCleanItems();
+	const visiblePaths = new Set(visibleItems.map((i) => i.path));
 	const checkboxes = $("cleanList").querySelectorAll<HTMLInputElement>("input[type='checkbox']");
 	checkboxes.forEach((cb) => {
 		cb.checked = checked;
 		const path = cb.dataset.path;
-		if (path) {
+		if (path && visiblePaths.has(path)) {
 			if (checked) cleanableSelected.add(path);
 			else cleanableSelected.delete(path);
 		}

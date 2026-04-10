@@ -2,9 +2,9 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	app: {
-		name: "ingombro",
+		name: "Ingombro",
 		identifier: "ingombro.electrobun.dev",
-		version: "0.0.1",
+		version: "0.2.0",
 	},
 	build: {
 		useAsar: false,

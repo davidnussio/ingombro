@@ -71,6 +71,8 @@ const de: Translations = {
 	notFound: "nicht gefunden",
 	cannotReadInfo: "Informationen konnten nicht gelesen werden",
 
+	filterAll: "Alle",
+
 	typeCode: "Code",
 	typeImages: "Bilder",
 	typeDocuments: "Dokumente",
