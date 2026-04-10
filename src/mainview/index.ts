@@ -19,6 +19,8 @@ type AppRPC = {
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
+			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string } };
+			saveSettings: { params: { maxCacheEntries: number; deleteMode: string }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -44,10 +46,29 @@ const rpc = Electroview.defineRPC<AppRPC>({
 				if (dirEl) dirEl.textContent = currentDir;
 			},
 			scanComplete: ({ tree }) => {
+				const wasInResults = currentTree !== null && navigationStack.length > 0;
 				currentTree = tree;
-				navigationStack = [tree];
-				showScreen("results");
-				renderResults(tree);
+
+				if (wasInResults) {
+					// Rebuild navigation stack preserving current position
+					const oldPaths = navigationStack.map((e) => e.path);
+					const newStack: DirEntry[] = [tree];
+					for (let i = 1; i < oldPaths.length; i++) {
+						const parent = newStack[newStack.length - 1]!;
+						const child = (parent.children || []).find((c) => c.path === oldPaths[i]);
+						if (child) {
+							newStack.push(child);
+						} else {
+							break; // deleted entry or path no longer exists
+						}
+					}
+					navigationStack = newStack;
+					renderResults(navigationStack[navigationStack.length - 1]!);
+				} else {
+					navigationStack = [tree];
+					showScreen("results");
+					renderResults(tree);
+				}
 			},
 			error: ({ message }) => {
 				alert("Errore: " + message);
@@ -75,6 +96,12 @@ const scanPathInput = $("scanPath") as HTMLInputElement;
 function showScreen(name: "welcome" | "scanning" | "results") {
 	document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
 	$(`screen-${name}`).classList.add("active");
+	const settings = $("settingsSection");
+	if (name === "welcome") {
+		settings.classList.remove("hidden");
+	} else {
+		settings.classList.add("hidden");
+	}
 }
 
 // --- Format size ---
@@ -187,11 +214,35 @@ let treemapRects: TreemapRect[] = [];
 let treemapAnimId: number | null = null;
 let skipNextAnimation = false;
 
-function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number) {
+function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number, canvasW?: number, canvasH?: number) {
+	// Treemap area bounds (2px padding from container edge)
+	const pad = 2;
+	const containerR = 12;
+	const innerR = containerR - pad; // 10px for corner rects
+	const defaultR = 4;
+	const edgeTolerance = 1; // px tolerance for edge detection
+
 	for (const r of rects) {
 		ctx.fillStyle = r.color;
 		ctx.globalAlpha = 0.85 * alpha;
-		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, 4);
+
+		// Determine which edges this rect touches
+		const w = canvasW || 9999;
+		const h = canvasH || 9999;
+		const touchTop = r.y <= pad + edgeTolerance;
+		const touchLeft = r.x <= pad + edgeTolerance;
+		const touchBottom = (r.y + r.h) >= h - pad - edgeTolerance;
+		const touchRight = (r.x + r.w) >= w - pad - edgeTolerance;
+
+		// Per-corner radius: [top-left, top-right, bottom-right, bottom-left]
+		const radii: [number, number, number, number] = [
+			(touchTop && touchLeft) ? innerR : defaultR,
+			(touchTop && touchRight) ? innerR : defaultR,
+			(touchBottom && touchRight) ? innerR : defaultR,
+			(touchBottom && touchLeft) ? innerR : defaultR,
+		];
+
+		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, radii);
 		ctx.fill();
 		ctx.globalAlpha = alpha;
 
@@ -247,7 +298,7 @@ function renderTreemap(entries: DirEntry[]) {
 	if (!shouldAnimate) {
 		ctx.scale(dpr, dpr);
 		ctx.clearRect(0, 0, rect.width, rect.height);
-		drawTreemapFrame(ctx, treemapRects, 1);
+		drawTreemapFrame(ctx, treemapRects, 1, rect.width, rect.height);
 		return;
 	}
 
@@ -281,7 +332,7 @@ function renderTreemap(entries: DirEntry[]) {
 		ctx.translate(cx, cy);
 		ctx.scale(scale, scale);
 		ctx.translate(-cx, -cy);
-		drawTreemapFrame(ctx, treemapRects, ease);
+		drawTreemapFrame(ctx, treemapRects, ease, rect.width, rect.height);
 		ctx.restore();
 
 		if (t < 1) {
@@ -292,24 +343,25 @@ function renderTreemap(entries: DirEntry[]) {
 			ctx.setTransform(1, 0, 0, 1, 0, 0);
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
 			ctx.scale(dpr, dpr);
-			drawTreemapFrame(ctx, treemapRects, 1);
+			drawTreemapFrame(ctx, treemapRects, 1, rect.width, rect.height);
 		}
 	}
 
 	treemapAnimId = requestAnimationFrame(animateFrame);
 }
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number | [number, number, number, number]) {
+	const [tl, tr, br, bl] = typeof r === "number" ? [r, r, r, r] : r;
 	ctx.beginPath();
-	ctx.moveTo(x + r, y);
-	ctx.lineTo(x + w - r, y);
-	ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-	ctx.lineTo(x + w, y + h - r);
-	ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-	ctx.lineTo(x + r, y + h);
-	ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-	ctx.lineTo(x, y + r);
-	ctx.quadraticCurveTo(x, y, x + r, y);
+	ctx.moveTo(x + tl, y);
+	ctx.lineTo(x + w - tr, y);
+	ctx.quadraticCurveTo(x + w, y, x + w, y + tr);
+	ctx.lineTo(x + w, y + h - br);
+	ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+	ctx.lineTo(x + bl, y + h);
+	ctx.quadraticCurveTo(x, y + h, x, y + h - bl);
+	ctx.lineTo(x, y + tl);
+	ctx.quadraticCurveTo(x, y, x + tl, y);
 	ctx.closePath();
 }
 
@@ -349,12 +401,26 @@ treemapCanvas.addEventListener("mouseleave", () => {
 	tooltip.classList.add("hidden");
 });
 
-treemapCanvas.addEventListener("click", (e) => {
+treemapCanvas.addEventListener("click", async (e) => {
 	const rect = treemapCanvas.getBoundingClientRect();
 	const mx = e.clientX - rect.left;
 	const my = e.clientY - rect.top;
 	const hit = treemapRects.find((r) => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h);
-	if (hit && hit.entry.isDir && hit.entry.children && hit.entry.children.length > 0) {
+	if (hit && hit.entry.isDir) {
+		// If children are not loaded yet, fetch them on demand
+		if (!hit.entry.children || hit.entry.children.length === 0) {
+			try {
+				const res = await electrobun.rpc?.request?.getChildren({ dirPath: hit.entry.path });
+				if (res && res.children && res.children.length > 0) {
+					hit.entry.children = res.children;
+					hit.entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
+				} else {
+					return;
+				}
+			} catch {
+				return;
+			}
+		}
 		navigationStack.push(hit.entry);
 		renderResults(hit.entry);
 	}
@@ -419,9 +485,23 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			</div>
 		`;
 
-		if (entry.isDir && entry.children && entry.children.length > 0) {
-			item.addEventListener("click", (e) => {
+		if (entry.isDir) {
+			item.addEventListener("click", async (e) => {
 				if ((e.target as HTMLElement).classList.contains("btn-delete")) return;
+				// If children are not loaded yet (deep directories), fetch them on demand
+				if (!entry.children || entry.children.length === 0) {
+					try {
+						const res = await electrobun.rpc?.request?.getChildren({ dirPath: entry.path });
+						if (res && res.children && res.children.length > 0) {
+							entry.children = res.children;
+							entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
+						} else {
+							return; // truly empty directory, nothing to navigate into
+						}
+					} catch {
+						return;
+					}
+				}
 				navigationStack.push(entry);
 				renderResults(entry);
 			});
@@ -759,5 +839,33 @@ scanPathInput.addEventListener("focus", () => {
 	if (scanPathInput.value) fetchSuggestions(scanPathInput.value);
 });
 
-// --- Init: load cache list ---
+// --- Settings ---
+const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
+const settingDeleteMode = $("settingDeleteMode") as HTMLSelectElement;
+let settingsSaveDebounce: ReturnType<typeof setTimeout> | null = null;
+
+async function loadSettingsUI() {
+	const settings = await electrobun.rpc?.request?.getSettings({});
+	if (settings) {
+		settingMaxCache.value = String(settings.maxCacheEntries);
+		settingDeleteMode.value = settings.deleteMode;
+	}
+}
+
+function saveSettingsDebounced() {
+	if (settingsSaveDebounce) clearTimeout(settingsSaveDebounce);
+	settingsSaveDebounce = setTimeout(async () => {
+		await electrobun.rpc?.request?.saveSettings({
+			maxCacheEntries: Number(settingMaxCache.value) || 10,
+			deleteMode: settingDeleteMode.value,
+		});
+	}, 400);
+}
+
+settingMaxCache.addEventListener("change", saveSettingsDebounced);
+settingMaxCache.addEventListener("input", saveSettingsDebounced);
+settingDeleteMode.addEventListener("change", saveSettingsDebounced);
+
+// --- Init ---
 renderCacheList();
+loadSettingsUI();

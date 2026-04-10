@@ -1,5 +1,5 @@
 import { BrowserView, BrowserWindow, Screen, ApplicationMenu } from "electrobun/bun";
-import { existsSync, statSync, readdirSync, rmSync } from "fs";
+import { existsSync, statSync, readdirSync, rmSync, mkdirSync } from "fs";
 import { join, basename, resolve } from "path";
 import { homedir } from "os";
 
@@ -22,6 +22,16 @@ interface CacheData {
 	entries: CacheEntry[];
 }
 
+interface AppSettings {
+	maxCacheEntries: number;
+	deleteMode: "trash" | "permanent";
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+	maxCacheEntries: 10,
+	deleteMode: "trash",
+};
+
 // --- Progress tracking ---
 let scanStats = { dirs: 0, files: 0, currentDir: "" };
 
@@ -32,9 +42,48 @@ function expandPath(p: string): string {
 	return resolve(p);
 }
 
+// --- App directory ---
+const APP_DIR = join(homedir(), ".ingombro");
+function ensureAppDir() {
+	if (!existsSync(APP_DIR)) mkdirSync(APP_DIR, { recursive: true });
+}
+
+// --- Settings ---
+const SETTINGS_FILE = join(APP_DIR, "settings.json");
+
+async function loadSettings(): Promise<AppSettings> {
+	try {
+		ensureAppDir();
+		if (existsSync(SETTINGS_FILE)) {
+			const text = await Bun.file(SETTINGS_FILE).text();
+			const parsed = JSON.parse(text);
+			return { ...DEFAULT_SETTINGS, ...parsed };
+		}
+	} catch {}
+	return { ...DEFAULT_SETTINGS };
+}
+
+async function saveSettings(settings: AppSettings) {
+	try {
+		ensureAppDir();
+		await Bun.write(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+	} catch (e) {
+		console.error("[ingombro] Failed to save settings:", e);
+	}
+}
+
 // --- Cache ---
-const MAX_CACHE_ENTRIES = 10;
-const CACHE_FILE = join(homedir(), ".diskscanner_cache.json");
+const CACHE_FILE = join(APP_DIR, "cache.json");
+// Migrate old cache file if exists
+const OLD_CACHE_FILE = join(homedir(), ".diskscanner_cache.json");
+if (existsSync(OLD_CACHE_FILE) && !existsSync(CACHE_FILE)) {
+	ensureAppDir();
+	try {
+		const oldData = require("fs").readFileSync(OLD_CACHE_FILE, "utf-8");
+		require("fs").writeFileSync(CACHE_FILE, oldData);
+		rmSync(OLD_CACHE_FILE);
+	} catch {}
+}
 
 async function loadCacheStore(): Promise<CacheData> {
 	try {
@@ -53,16 +102,18 @@ async function loadCacheStore(): Promise<CacheData> {
 
 function saveCacheStore(data: CacheData) {
 	try {
+		ensureAppDir();
 		Bun.write(CACHE_FILE, JSON.stringify(data));
 	} catch (e) {
-		console.error("[disk-scanner] Failed to save cache:", e);
+		console.error("[ingombro] Failed to save cache:", e);
 	}
 }
 
-function upsertCacheEntry(store: CacheData, entry: CacheEntry): CacheData {
+async function upsertCacheEntry(store: CacheData, entry: CacheEntry): Promise<CacheData> {
+	const settings = await loadSettings();
 	const filtered = store.entries.filter((e) => e.rootPath !== entry.rootPath);
 	filtered.unshift(entry);
-	return { entries: filtered.slice(0, MAX_CACHE_ENTRIES) };
+	return { entries: filtered.slice(0, settings.maxCacheEntries) };
 }
 
 function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | null {
@@ -170,6 +221,8 @@ const rpc = BrowserView.defineRPC<{
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
+			getSettings: { params: {}; response: AppSettings };
+			saveSettings: { params: { maxCacheEntries: number; deleteMode: string }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -232,7 +285,7 @@ const rpc = BrowserView.defineRPC<{
 					const tree = scanDirectory(targetPath, 0, 3, sendProgress);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
 					const store = await loadCacheStore();
-					saveCacheStore(upsertCacheEntry(store, entry));
+					saveCacheStore(await upsertCacheEntry(store, entry));
 					rpc.send.scanComplete({ tree });
 					return { success: true };
 				} catch (e: any) {
@@ -260,7 +313,7 @@ const rpc = BrowserView.defineRPC<{
 						if (found) return { children: found.children || [] };
 					}
 				}
-				const tree = scanDirectory(resolved, 0, 1);
+				const tree = scanDirectory(resolved, 0, 3);
 				return { children: tree.children || [] };
 			},
 			validatePath: async ({ dirPath }) => {
@@ -323,10 +376,21 @@ const rpc = BrowserView.defineRPC<{
 					if (!existsSync(resolved)) {
 						return { success: false, error: "Path does not exist" };
 					}
-					rmSync(resolved, { recursive: true, force: true });
+
+					const settings = await loadSettings();
+					if (settings.deleteMode === "trash") {
+						// Move to macOS Trash using AppleScript
+						const name = basename(resolved);
+						const proc = Bun.spawnSync(["osascript", "-e", `tell application "Finder" to delete POSIX file "${resolved}"`]);
+						if (proc.exitCode !== 0) {
+							// Fallback to permanent delete
+							rmSync(resolved, { recursive: true, force: true });
+						}
+					} else {
+						rmSync(resolved, { recursive: true, force: true });
+					}
 
 					const store = await loadCacheStore();
-					// Update all cache entries that might contain this path
 					for (const cacheEntry of store.entries) {
 						if (removeDirFromCacheEntry(cacheEntry, resolved)) {
 							saveCacheStore(store);
@@ -339,13 +403,30 @@ const rpc = BrowserView.defineRPC<{
 					return { success: false, error: e.message };
 				}
 			},
+			getSettings: async () => {
+				return await loadSettings();
+			},
+			saveSettings: async ({ maxCacheEntries, deleteMode }) => {
+				const settings: AppSettings = {
+					maxCacheEntries: Math.max(1, Math.min(50, maxCacheEntries)),
+					deleteMode: deleteMode === "permanent" ? "permanent" : "trash",
+				};
+				await saveSettings(settings);
+				// Trim cache if needed
+				const store = await loadCacheStore();
+				if (store.entries.length > settings.maxCacheEntries) {
+					store.entries = store.entries.slice(0, settings.maxCacheEntries);
+					saveCacheStore(store);
+				}
+				return { success: true };
+			},
 		},
 		messages: {},
 	},
 });
 
 const mainWin = new BrowserWindow({
-	title: "Disk Scanner",
+	title: "Ingombro",
 	url: "views://mainview/index.html",
 	frame: {
 		width: 1100,
@@ -361,7 +442,7 @@ const mainWin = new BrowserWindow({
 // --- Application Menu (enables Cmd+C, Cmd+V, etc.) ---
 ApplicationMenu.setApplicationMenu([
 	{
-		label: "Disk Scanner",
+		label: "Ingombro",
 		submenu: [
 			{ role: "about" },
 			{ type: "separator" },

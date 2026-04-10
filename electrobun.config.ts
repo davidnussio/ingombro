@@ -2,8 +2,8 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	app: {
-		name: "disk-scanner",
-		identifier: "disk-scanner.electrobun.dev",
+		name: "ingombro",
+		identifier: "ingombro.electrobun.dev",
 		version: "0.0.1",
 	},
 	build: {
