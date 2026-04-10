@@ -4,6 +4,10 @@ on:
   release:
     types: [created]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag della release (es. v1.0.0)"
+        required: true
 
 jobs:
   build-and-release:
@@ -18,6 +22,8 @@ jobs:
     steps:
       - name: Checkout del codice
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Setup di Bun
         uses: oven-sh/setup-bun@v2
@@ -28,13 +34,12 @@ jobs:
         run: bun install
 
       - name: Build dell'app
-        # Assicurati che questo sia il comando corretto per il tuo progetto
         run: bun run build:canary
 
       - name: Pubblica su GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          # Sostituisci con il percorso effettivo generato da Electrobun
+          tag_name: ${{ github.event.inputs.tag || github.event.release.tag_name }}
           files: artifacts/*
           generate_release_notes: true
         env:
