@@ -793,6 +793,16 @@ function renderCleanList() {
 	list.innerHTML = "";
 	const items = getFilteredCleanItems();
 
+	// Deseleziona gli elementi non visibili
+	if (currentCleanables && activeCleanFilters.size > 0) {
+		const visiblePaths = new Set(items.map((i) => i.path));
+		for (const path of [...cleanableSelected]) {
+			if (!visiblePaths.has(path)) {
+				cleanableSelected.delete(path);
+			}
+		}
+	}
+
 	for (const item of items) {
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
@@ -824,7 +834,7 @@ function renderCleanList() {
 function updateCleanSelection() {
 	if (!currentCleanables) return;
 	const visibleItems = getFilteredCleanItems();
-	const selectedItems = currentCleanables.items.filter((i) => cleanableSelected.has(i.path));
+	const selectedItems = visibleItems.filter((i) => cleanableSelected.has(i.path));
 	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
 	const count = selectedItems.length;
 
