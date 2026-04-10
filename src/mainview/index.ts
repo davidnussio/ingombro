@@ -9,6 +9,19 @@ interface DirEntry {
 	isDir: boolean;
 }
 
+interface CleanableItem {
+	path: string;
+	projectPath: string;
+	projectType: string;
+	folderName: string;
+	size: number;
+}
+
+interface CleanableResult {
+	items: CleanableItem[];
+	totalSize: number;
+}
+
 type AppRPC = {
 	bun: {
 		requests: {
@@ -21,6 +34,8 @@ type AppRPC = {
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string; maxDepth: number } };
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
+			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
+			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 		};
 		messages: {};
 	};
@@ -67,6 +82,8 @@ let pendingDeletePath: string | null = null;
 let pendingDeleteSize: number = 0;
 let totalFreedBytes: number = 0;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+let currentCleanables: CleanableResult | null = null;
+let cleanableSelected: Set<string> = new Set();
 
 // --- Scan helper ---
 async function startScan(dirPath: string) {
@@ -82,6 +99,8 @@ async function startScan(dirPath: string) {
 			return;
 		}
 		await loadTreeFromCache(result.rootPath, false);
+		// Trigger smart clean detection in background
+		detectAndShowCleanables(result.rootPath);
 	} catch (e) {
 		console.error(`[fe] startScan error:`, e);
 		showScreen("welcome");
@@ -140,6 +159,8 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 	const settings = $("settingsSection");
 	if (name === "welcome") {
 		settings.classList.remove("hidden");
+		$("cleanBanner").classList.add("hidden");
+		currentCleanables = null;
 	} else {
 		settings.classList.add("hidden");
 	}
@@ -578,6 +599,157 @@ function escapeAttr(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// --- Smart Clean ---
+const PROJECT_ICONS: Record<string, string> = {
+	"Node / Bun": "📦",
+	Python: "🐍",
+	Rust: "🦀",
+	iOS: "🍎",
+	"Build artifacts": "🔨",
+	Cache: "🗄️",
+};
+
+async function detectAndShowCleanables(rootPath: string) {
+	const banner = $("cleanBanner");
+	banner.classList.remove("hidden");
+	banner.classList.add("clean-banner-scanning");
+	$("cleanBannerMsg").textContent = "Analisi progetti in corso…";
+	$("btnOpenClean").classList.add("hidden");
+
+	try {
+		const result = await electrobun.rpc?.request?.detectCleanables({ rootPath });
+		if (!result || result.items.length === 0) {
+			banner.classList.add("hidden");
+			currentCleanables = null;
+			return;
+		}
+		currentCleanables = result;
+		cleanableSelected = new Set(result.items.map((i) => i.path));
+		banner.classList.remove("clean-banner-scanning");
+		const count = result.items.length;
+		$("cleanBannerMsg").textContent = `${formatSize(result.totalSize)} recuperabili da ${count} cartell${count === 1 ? "a" : "e"} di progetto`;
+		$("btnOpenClean").classList.remove("hidden");
+	} catch (e) {
+		console.error("[cleanables] detection error:", e);
+		banner.classList.add("hidden");
+		currentCleanables = null;
+	}
+}
+
+function openCleanModal() {
+	if (!currentCleanables || currentCleanables.items.length === 0) return;
+	const modal = $("modal-clean");
+	const list = $("cleanList");
+
+	$("cleanTotalBadge").textContent = formatSize(currentCleanables.totalSize);
+	cleanableSelected = new Set(currentCleanables.items.map((i) => i.path));
+
+	list.innerHTML = "";
+	for (const item of currentCleanables.items) {
+		const icon = PROJECT_ICONS[item.projectType] || "📁";
+		const row = document.createElement("label");
+		row.className = "clean-item";
+		row.innerHTML = `
+			<input type="checkbox" checked data-path="${escapeAttr(item.path)}" />
+			<div class="clean-item-icon">${icon}</div>
+			<div class="clean-item-info">
+				<div class="clean-item-project">${escapeHtml(item.projectPath)}</div>
+				<div class="clean-item-detail">${escapeHtml(item.folderName)}</div>
+			</div>
+			<div class="clean-item-type">${escapeHtml(item.projectType)}</div>
+			<div class="clean-item-size">${formatSize(item.size)}</div>
+		`;
+		const cb = row.querySelector("input")!;
+		cb.addEventListener("change", () => {
+			if (cb.checked) {
+				cleanableSelected.add(item.path);
+			} else {
+				cleanableSelected.delete(item.path);
+			}
+			updateCleanSelection();
+		});
+		list.appendChild(row);
+	}
+
+	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
+	updateCleanSelection();
+	modal.classList.remove("hidden");
+}
+
+function updateCleanSelection() {
+	if (!currentCleanables) return;
+	const selectedItems = currentCleanables.items.filter((i) => cleanableSelected.has(i.path));
+	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
+	const count = selectedItems.length;
+
+	$("cleanSelectedInfo").textContent = `${count} selezionat${count === 1 ? "a" : "e"} · ${formatSize(totalSelected)}`;
+	const btn = $("btnConfirmClean") as HTMLButtonElement;
+	btn.disabled = count === 0;
+	$("btnConfirmCleanText").textContent = count > 0 ? `Pulisci selezionati (${formatSize(totalSelected)})` : "Pulisci selezionati";
+
+	// Sync select-all checkbox
+	const selectAll = document.getElementById("cleanSelectAll") as HTMLInputElement;
+	selectAll.checked = count === currentCleanables.items.length;
+	selectAll.indeterminate = count > 0 && count < currentCleanables.items.length;
+}
+
+$("cleanSelectAll").addEventListener("change", () => {
+	const checked = (document.getElementById("cleanSelectAll") as HTMLInputElement).checked;
+	if (!currentCleanables) return;
+	const checkboxes = $("cleanList").querySelectorAll<HTMLInputElement>("input[type='checkbox']");
+	checkboxes.forEach((cb) => {
+		cb.checked = checked;
+		const path = cb.dataset.path;
+		if (path) {
+			if (checked) cleanableSelected.add(path);
+			else cleanableSelected.delete(path);
+		}
+	});
+	updateCleanSelection();
+});
+
+$("btnOpenClean").addEventListener("click", () => openCleanModal());
+
+$("btnCancelClean").addEventListener("click", () => {
+	$("modal-clean").classList.add("hidden");
+});
+
+$("modal-clean").querySelector(".modal-backdrop")!.addEventListener("click", () => {
+	$("modal-clean").classList.add("hidden");
+});
+
+$("btnConfirmClean").addEventListener("click", async () => {
+	if (cleanableSelected.size === 0) return;
+	const paths = Array.from(cleanableSelected);
+	const btn = $("btnConfirmClean") as HTMLButtonElement;
+	btn.disabled = true;
+	$("btnConfirmCleanText").textContent = "Pulizia in corso…";
+
+	try {
+		const result = await electrobun.rpc?.request?.batchDelete({ paths });
+		$("modal-clean").classList.add("hidden");
+
+		if (result) {
+			if (result.deletedSize > 0) {
+				totalFreedBytes += result.deletedSize;
+				showFreedToast(result.deletedSize);
+			}
+			if (result.errors.length > 0) {
+				console.error("[cleanables] batch delete errors:", result.errors);
+			}
+			// Refresh the view
+			if (currentTree) {
+				await loadTreeFromCache(currentTree.path, true);
+				// Re-detect cleanables
+				detectAndShowCleanables(currentTree.path);
+			}
+		}
+	} catch (e) {
+		console.error("[cleanables] batch delete error:", e);
+		$("modal-clean").classList.add("hidden");
+	}
+});
+
 // --- Navigation ---
 $("btnBack").addEventListener("click", () => {
 	if (navigationStack.length > 1) {
@@ -638,6 +810,7 @@ async function renderCacheList() {
 			const path = (e.currentTarget as HTMLElement).dataset.path!;
 			scanPathInput.value = path;
 			await loadTreeFromCache(path, false);
+			detectAndShowCleanables(path);
 		});
 	});
 	container.querySelectorAll("[data-action='rescan']").forEach((btn) => {

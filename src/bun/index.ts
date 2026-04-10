@@ -187,6 +187,113 @@ function getDirSizeShallow(dirPath: string): number {
 	return total;
 }
 
+// --- Smart Clean: cleanable folder detection ---
+interface CleanableItem {
+	path: string;
+	projectPath: string;
+	projectType: string;
+	folderName: string;
+	size: number;
+}
+
+interface CleanableResult {
+	items: CleanableItem[];
+	totalSize: number;
+}
+
+// Rules: folderName → { projectType, sentinels (files that confirm the project type) }
+const CLEANABLE_RULES: Record<string, { projectType: string; sentinels: string[] }> = {
+	node_modules: { projectType: "Node / Bun", sentinels: ["package.json"] },
+	__pycache__: { projectType: "Python", sentinels: ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"] },
+	".venv": { projectType: "Python", sentinels: ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"] },
+	venv: { projectType: "Python", sentinels: ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile"] },
+	".tox": { projectType: "Python", sentinels: ["requirements.txt", "pyproject.toml", "setup.py", "tox.ini"] },
+	target: { projectType: "Rust", sentinels: ["Cargo.toml"] },
+	build: { projectType: "Build artifacts", sentinels: ["package.json", "build.gradle", "CMakeLists.txt", "Makefile"] },
+	dist: { projectType: "Build artifacts", sentinels: ["package.json", "pyproject.toml", "setup.py"] },
+	".next": { projectType: "Build artifacts", sentinels: ["package.json", "next.config.js", "next.config.mjs", "next.config.ts"] },
+	".nuxt": { projectType: "Build artifacts", sentinels: ["package.json", "nuxt.config.js", "nuxt.config.ts"] },
+	".cache": { projectType: "Cache", sentinels: [] },
+	".parcel-cache": { projectType: "Cache", sentinels: ["package.json"] },
+	Pods: { projectType: "iOS", sentinels: ["Podfile"] },
+};
+
+const CLEANABLE_NAMES = new Set(Object.keys(CLEANABLE_RULES));
+
+function getDirSizeRecursive(dirPath: string): number {
+	let total = 0;
+	try {
+		const items = readdirSync(dirPath, { withFileTypes: true });
+		for (const item of items) {
+			try {
+				const fullPath = join(dirPath, item.name);
+				if (item.isFile() || item.isSymbolicLink()) {
+					const stat = statSync(fullPath, { throwIfNoEntry: false });
+					total += stat ? (stat.blocks ?? 0) * 512 : 0;
+				} else if (item.isDirectory()) {
+					total += getDirSizeRecursive(fullPath);
+				}
+			} catch {}
+		}
+	} catch {}
+	return total;
+}
+
+function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResult {
+	const items: CleanableItem[] = [];
+
+	function walk(dirPath: string, depth: number) {
+		if (depth > maxDepth) return;
+		try {
+			const entries = readdirSync(dirPath, { withFileTypes: true });
+			for (const entry of entries) {
+				if (entry.name === ".Trash") continue;
+				if (!entry.isDirectory()) continue;
+
+				const fullPath = join(dirPath, entry.name);
+
+				if (CLEANABLE_NAMES.has(entry.name)) {
+					const rule = CLEANABLE_RULES[entry.name]!;
+					// Check sentinels in parent directory
+					let confirmed = rule.sentinels.length === 0; // no sentinels = always match
+					if (!confirmed) {
+						for (const sentinel of rule.sentinels) {
+							if (existsSync(join(dirPath, sentinel))) {
+								confirmed = true;
+								break;
+							}
+						}
+					}
+					if (confirmed) {
+						const size = getDirSizeRecursive(fullPath);
+						if (size > 0) {
+							items.push({
+								path: fullPath,
+								projectPath: dirPath,
+								projectType: rule.projectType,
+								folderName: entry.name,
+								size,
+							});
+						}
+						// Don't recurse into cleanable folders
+						continue;
+					}
+				}
+
+				// Recurse into non-cleanable directories (skip hidden dirs except specific ones)
+				if (!entry.name.startsWith(".") || CLEANABLE_NAMES.has(entry.name)) {
+					walk(fullPath, depth + 1);
+				}
+			}
+		} catch {}
+	}
+
+	walk(rootPath, 0);
+	items.sort((a, b) => b.size - a.size);
+	const totalSize = items.reduce((s, i) => s + i.size, 0);
+	return { items, totalSize };
+}
+
 function removeDirFromCacheEntry(cacheEntry: CacheEntry, targetPath: string): boolean {
 	function removeFromEntry(entry: DirEntry): number {
 		if (!entry.children) return 0;
@@ -225,6 +332,8 @@ const rpc = BrowserView.defineRPC<{
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 			getSettings: { params: {}; response: AppSettings };
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
+			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
+			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 		};
 		messages: {};
 	};
@@ -423,6 +532,60 @@ const rpc = BrowserView.defineRPC<{
 					saveCacheStore(store);
 				}
 				return { success: true };
+			},
+			detectCleanables: async ({ rootPath }) => {
+				const resolved = expandPath(rootPath);
+				if (!existsSync(resolved)) return { items: [], totalSize: 0 };
+				console.log(`[cleanables] Scanning ${resolved}...`);
+				const startTime = Date.now();
+				const result = detectCleanables(resolved);
+				console.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${Date.now() - startTime}ms`);
+				return result;
+			},
+			batchDelete: async ({ paths }) => {
+				const settings = await loadSettings();
+				const store = await loadCacheStore();
+				let deletedCount = 0;
+				let deletedSize = 0;
+				const errors: string[] = [];
+				let cacheModified = false;
+
+				for (const p of paths) {
+					try {
+						const resolved = expandPath(p);
+						if (!existsSync(resolved)) {
+							errors.push(`${p}: non trovato`);
+							continue;
+						}
+						// Get size before deleting
+						const size = getDirSizeRecursive(resolved);
+
+						if (settings.deleteMode === "trash") {
+							const proc = Bun.spawnSync(["osascript", "-e", `tell application "Finder" to delete POSIX file "${resolved}"`]);
+							if (proc.exitCode !== 0) {
+								rmSync(resolved, { recursive: true, force: true });
+							}
+						} else {
+							rmSync(resolved, { recursive: true, force: true });
+						}
+
+						deletedCount++;
+						deletedSize += size;
+
+						// Update cache
+						for (const cacheEntry of store.entries) {
+							if (removeDirFromCacheEntry(cacheEntry, resolved)) {
+								cacheModified = true;
+								break;
+							}
+						}
+					} catch (e: any) {
+						errors.push(`${p}: ${e.message}`);
+					}
+				}
+
+				if (cacheModified) saveCacheStore(store);
+				return { success: errors.length === 0, deletedCount, deletedSize, errors };
 			},
 		},
 		messages: {},

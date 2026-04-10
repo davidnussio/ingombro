@@ -6,7 +6,7 @@
 - [ ] **T004 — Filtro rapido nella lista** — Campo di ricerca sopra la dir-list per filtrare le cartelle per nome.
 - [ ] **T005 — Keyboard shortcuts** — `Backspace` per tornare indietro, `Esc` per tornare alla home.
 - [ ] **T006 — Hover highlight sincronizzato** — Evidenziare il rettangolo nel treemap al passaggio del mouse sulla lista (e viceve`U`rsa).
-- [ ] **T007 — Smart clean suggestions** — Riconoscimento automatico di cartelle "pulibili" nei progetti:
+- [x] **T007 — Smart clean suggestions** — Riconoscimento automatico di cartelle "pulibili" nei progetti:
   - `node_modules` → progetto Node/Bun (se presente `package.json`)
   - `__pycache__`, `.venv`, `venv`, `.tox` → progetto Python (se presente `requirements.txt` o `pyproject.toml`)
   - `target` → progetto Rust (se presente `Cargo.toml`)

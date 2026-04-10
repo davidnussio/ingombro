@@ -53,6 +53,13 @@
 				</div>
 			</div>
 			<div class="results-body">
+				<div id="cleanBanner" class="clean-banner hidden">
+					<div class="clean-banner-icon">🧹</div>
+					<div class="clean-banner-text">
+						<span id="cleanBannerMsg"></span>
+					</div>
+					<button id="btnOpenClean" class="btn btn-sm btn-accent">Vedi dettagli</button>
+				</div>
 				<div class="viz-container" id="vizContainer">
 					<canvas id="treemapCanvas"></canvas>
 				</div>
@@ -95,6 +102,33 @@
 			<div class="modal-actions">
 				<button id="btnCancelDelete" class="btn btn-secondary">Annulla</button>
 				<button id="btnConfirmDelete" class="btn btn-danger">Elimina</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Smart Clean modal -->
+	<div id="modal-clean" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="modal-card modal-card-lg">
+			<div class="clean-modal-header">
+				<h3>🧹 Smart Clean</h3>
+				<span id="cleanTotalBadge" class="clean-total-badge"></span>
+			</div>
+			<p class="clean-modal-desc">Cartelle di progetto eliminabili per recuperare spazio.</p>
+			<div class="clean-toolbar">
+				<label class="clean-select-all">
+					<input type="checkbox" id="cleanSelectAll" checked />
+					<span>Seleziona tutto</span>
+				</label>
+				<span id="cleanSelectedInfo" class="clean-selected-info"></span>
+			</div>
+			<div id="cleanList" class="clean-list"></div>
+			<div class="modal-actions">
+				<button id="btnCancelClean" class="btn btn-secondary">Annulla</button>
+				<button id="btnConfirmClean" class="btn btn-danger" disabled>
+					<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+					<span id="btnConfirmCleanText">Pulisci selezionati</span>
+				</button>
 			</div>
 		</div>
 	</div>
