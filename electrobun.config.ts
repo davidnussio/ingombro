@@ -28,4 +28,9 @@ export default {
 			icon: "assets/icon.png",
 		},
 	},
+	release: {
+		baseUrl:
+			"https://github.com/davidnussio/ingombro/releases/latest/download",
+		generatePatch: true,
+	},
 } satisfies ElectrobunConfig;

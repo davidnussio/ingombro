@@ -1,0 +1,41 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*" # Si attiva spingendo un tag (es. v1.0.0)
+
+jobs:
+  build-and-release:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14 # Consigliato per Apple Silicon
+          - os: windows-latest
+          - os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout del codice
+        uses: actions/checkout@v4
+
+      - name: Setup di Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Installa le dipendenze
+        run: bun install
+
+      - name: Build dell'app
+        # Assicurati che questo sia il comando corretto per il tuo progetto
+        run: bun run build:canary
+
+      - name: Pubblica su GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          # Sostituisci con il percorso effettivo generato da Electrobun
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
