@@ -28,10 +28,11 @@ jobs:
 
     env:
       IS_PRERELEASE: ${{ github.event.release.prerelease || inputs.prerelease || false }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout del codice
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag || github.ref }}
 
@@ -71,3 +72,76 @@ jobs:
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: build-and-release
+    if: ${{ !(github.event.release.prerelease || inputs.prerelease || false) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calcola SHA256 del DMG
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          URL="https://github.com/davidnussio/ingombro/releases/download/${TAG}/stable-macos-arm64-Ingombro.dmg"
+
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -sL -o Ingombro.dmg -w "%{http_code}" "$URL")
+            if [ "$HTTP_CODE" = "200" ]; then
+              break
+            fi
+            echo "Attempt $i: got HTTP $HTTP_CODE, retrying in 15s..."
+            sleep 15
+          done
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Failed to download DMG after 5 attempts"
+            exit 1
+          fi
+
+          SHA256=$(shasum -a 256 Ingombro.dmg | awk '{print $1}')
+          rm Ingombro.dmg
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+        id: dmg
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: davidnussio/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Aggiorna cask formula
+        run: |
+          mkdir -p Casks
+          cat > Casks/ingombro.rb << 'EOF'
+          cask "ingombro" do
+            version "${{ steps.dmg.outputs.version }}"
+            sha256 "${{ steps.dmg.outputs.sha256 }}"
+
+            url "${{ steps.dmg.outputs.url }}"
+            name "Ingombro"
+            desc "Disk space analyzer and cleaner"
+            homepage "https://github.com/davidnussio/ingombro"
+
+            depends_on arch: :arm64
+
+            app "Ingombro.app"
+
+            zap trash: [
+              "~/Library/Application Support/ingombro.electrobun.dev",
+              "~/Library/Preferences/ingombro.electrobun.dev.plist",
+            ]
+          end
+          EOF
+          sed -i 's/^          //' Casks/ingombro.rb
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ steps.dmg.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/ingombro.rb
+          git commit -m "ingombro ${VERSION}"
+          git push
