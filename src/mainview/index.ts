@@ -12,9 +12,9 @@ interface DirEntry {
 type AppRPC = {
 	bun: {
 		requests: {
-			scanDirectory: { params: { dirPath: string }; response: { success: boolean; error?: string } };
+			scanDirectory: { params: { dirPath: string }; response: { success: boolean; rootPath?: string; error?: string } };
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
-			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
+			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string; rootPath?: string } };
 			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
@@ -27,8 +27,7 @@ type AppRPC = {
 	webview: {
 		requests: {};
 		messages: {
-			scanProgress: { currentDir: string; dirs: number; files: number };
-			scanComplete: { tree: DirEntry };
+			scanProgress: { currentDir: string };
 			error: { message: string };
 		};
 	};
@@ -39,38 +38,19 @@ const rpc = Electroview.defineRPC<AppRPC>({
 	handlers: {
 		requests: {},
 		messages: {
-			scanProgress: ({ currentDir, dirs, files }) => {
-				const el = document.getElementById("scanStatus");
-				if (el) el.textContent = `${dirs} directory · ${files} file scansionati`;
+			scanProgress: ({ currentDir }) => {
 				const dirEl = document.getElementById("scanCurrentDir");
-				if (dirEl) dirEl.textContent = currentDir;
-			},
-			scanComplete: ({ tree }) => {
-				const wasInResults = currentTree !== null && navigationStack.length > 0;
-				currentTree = tree;
-
-				if (wasInResults) {
-					// Rebuild navigation stack preserving current position
-					const oldPaths = navigationStack.map((e) => e.path);
-					const newStack: DirEntry[] = [tree];
-					for (let i = 1; i < oldPaths.length; i++) {
-						const parent = newStack[newStack.length - 1]!;
-						const child = (parent.children || []).find((c) => c.path === oldPaths[i]);
-						if (child) {
-							newStack.push(child);
-						} else {
-							break; // deleted entry or path no longer exists
-						}
+				if (dirEl) {
+					const maxLen = 60;
+					if (currentDir.length > maxLen) {
+						dirEl.textContent = "…" + currentDir.slice(-(maxLen - 1));
+					} else {
+						dirEl.textContent = currentDir;
 					}
-					navigationStack = newStack;
-					renderResults(navigationStack[navigationStack.length - 1]!);
-				} else {
-					navigationStack = [tree];
-					showScreen("results");
-					renderResults(tree);
 				}
 			},
 			error: ({ message }) => {
+				console.error(`[fe] error received: ${message}`);
 				alert("Errore: " + message);
 				showScreen("welcome");
 			},
@@ -87,6 +67,67 @@ let pendingDeletePath: string | null = null;
 let pendingDeleteSize: number = 0;
 let totalFreedBytes: number = 0;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// --- Scan helper ---
+async function startScan(dirPath: string) {
+	showScreen("scanning");
+	console.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
+	try {
+		const result = await electrobun.rpc?.request?.scanDirectory({ dirPath });
+		console.log(`[fe] startScan: response received`, result);
+		if (!result || !result.success || !result.rootPath) {
+			alert("Errore: " + (result?.error || "scansione fallita"));
+			showScreen("welcome");
+			renderCacheList();
+			return;
+		}
+		await loadTreeFromCache(result.rootPath, false);
+	} catch (e) {
+		console.error(`[fe] startScan error:`, e);
+		showScreen("welcome");
+		renderCacheList();
+	}
+}
+
+async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
+	console.log(`[fe] loadTreeFromCache: rootPath="${rootPath}" preserveNav=${preserveNav}`);
+	const res = await electrobun.rpc?.request?.getChildren({ dirPath: rootPath });
+	if (!res || !res.children || res.children.length === 0) {
+		console.log(`[fe] loadTreeFromCache: no children`);
+		showScreen("welcome");
+		renderCacheList();
+		return;
+	}
+	const tree: DirEntry = {
+		path: rootPath,
+		name: rootPath.split("/").pop() || rootPath,
+		size: res.children.reduce((s: number, c: DirEntry) => s + c.size, 0),
+		isDir: true,
+		children: res.children,
+	};
+
+	if (preserveNav && currentTree !== null && navigationStack.length > 0) {
+		const oldPaths = navigationStack.map((e) => e.path);
+		const newStack: DirEntry[] = [tree];
+		for (let i = 1; i < oldPaths.length; i++) {
+			const parent = newStack[newStack.length - 1]!;
+			const child = (parent.children || []).find((c) => c.path === oldPaths[i]);
+			if (child) {
+				newStack.push(child);
+			} else {
+				break;
+			}
+		}
+		currentTree = tree;
+		navigationStack = newStack;
+		renderResults(navigationStack[navigationStack.length - 1]!);
+	} else {
+		currentTree = tree;
+		navigationStack = [tree];
+		showScreen("results");
+		renderResults(tree);
+	}
+}
 
 // --- DOM ---
 const $ = (id: string) => document.getElementById(id)!;
@@ -550,14 +591,12 @@ $("btnScan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
 	if (!dirPath) return;
 	acList.classList.add("hidden");
-	showScreen("scanning");
-	electrobun.rpc?.request?.scanDirectory({ dirPath });
+	startScan(dirPath);
 });
 
 $("btnRescan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
-	showScreen("scanning");
-	electrobun.rpc?.request?.scanDirectory({ dirPath });
+	startScan(dirPath);
 });
 
 // --- Render cache list ---
@@ -595,27 +634,14 @@ async function renderCacheList() {
 		btn.addEventListener("click", async (e) => {
 			const path = (e.currentTarget as HTMLElement).dataset.path!;
 			scanPathInput.value = path;
-			showScreen("scanning");
-			const res = await electrobun.rpc?.request?.getChildren({ dirPath: path });
-			if (res && res.children) {
-				const tree: DirEntry = {
-					path, name: path.split("/").pop() || path,
-					size: res.children.reduce((s: number, c: DirEntry) => s + c.size, 0),
-					isDir: true, children: res.children,
-				};
-				currentTree = tree;
-				navigationStack = [tree];
-				showScreen("results");
-				renderResults(tree);
-			}
+			await loadTreeFromCache(path, false);
 		});
 	});
 	container.querySelectorAll("[data-action='rescan']").forEach((btn) => {
 		btn.addEventListener("click", (e) => {
 			const path = (e.currentTarget as HTMLElement).dataset.path!;
 			scanPathInput.value = path;
-			showScreen("scanning");
-			electrobun.rpc?.request?.scanDirectory({ dirPath: path });
+			startScan(path);
 		});
 	});
 	container.querySelectorAll("[data-action='delete-cache']").forEach((btn) => {
@@ -655,6 +681,10 @@ $("btnConfirmDelete").addEventListener("click", async () => {
 	} else {
 		totalFreedBytes += deletedSize;
 		showFreedToast(deletedSize);
+		// Reload tree from cache to reflect deletion
+		if (result?.rootPath) {
+			await loadTreeFromCache(result.rootPath, true);
+		}
 	}
 });
 

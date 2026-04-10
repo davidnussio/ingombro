@@ -120,14 +120,14 @@ function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | null {
 	return store.entries.find((e) => e.rootPath === rootPath) || null;
 }
 
-// --- Filesystem Scanner (with progress) ---
-function scanDirectory(dirPath: string, depth: number = 0, maxDepth: number = 3, sendProgress: () => void = () => {}): DirEntry {
+// --- Filesystem Scanner (async with progress) ---
+async function scanDirectoryAsync(dirPath: string, depth: number = 0, maxDepth: number = 3, sendProgress: () => Promise<void> = async () => {}): Promise<DirEntry> {
 	const name = basename(dirPath) || dirPath;
 	const entry: DirEntry = { path: dirPath, name, size: 0, isDir: true, children: [] };
 
 	scanStats.dirs++;
 	scanStats.currentDir = dirPath;
-	sendProgress();
+	await sendProgress();
 
 	try {
 		const items = readdirSync(dirPath, { withFileTypes: true });
@@ -138,7 +138,7 @@ function scanDirectory(dirPath: string, depth: number = 0, maxDepth: number = 3,
 			try {
 				if (item.isDirectory()) {
 					if (depth < maxDepth) {
-						const child = scanDirectory(fullPath, depth + 1, maxDepth, sendProgress);
+						const child = await scanDirectoryAsync(fullPath, depth + 1, maxDepth, sendProgress);
 						entry.children!.push(child);
 						entry.size += child.size;
 					} else {
@@ -214,9 +214,9 @@ const workArea = display.workArea;
 const rpc = BrowserView.defineRPC<{
 	bun: {
 		requests: {
-			scanDirectory: { params: { dirPath: string }; response: { success: boolean; error?: string } };
+			scanDirectory: { params: { dirPath: string }; response: { success: boolean; rootPath?: string; error?: string } };
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
-			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string } };
+			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string; rootPath?: string } };
 			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
@@ -229,8 +229,7 @@ const rpc = BrowserView.defineRPC<{
 	webview: {
 		requests: {};
 		messages: {
-			scanProgress: { currentDir: string; dirs: number; files: number };
-			scanComplete: { tree: DirEntry };
+			scanProgress: { currentDir: string };
 			error: { message: string };
 		};
 	};
@@ -259,37 +258,39 @@ const rpc = BrowserView.defineRPC<{
 			},
 			scanDirectory: async ({ dirPath }) => {
 				const targetPath = expandPath(dirPath || "~");
-				console.log(`[disk-scanner] Scanning: ${targetPath}`);
+				console.log(`[scan] === REQUEST RECEIVED === dirPath="${dirPath}" targetPath="${targetPath}"`);
 
 				if (!existsSync(targetPath)) {
-					rpc.send.error({ message: `Directory non trovata: ${targetPath}` });
 					return { success: false, error: "Directory not found" };
 				}
 
 				scanStats = { dirs: 0, files: 0, currentDir: targetPath };
 
 				let lastProgressTime = 0;
-				const sendProgress = () => {
+				const sendProgress = async () => {
 					const now = Date.now();
-					if (now - lastProgressTime > 150) {
+					if (now - lastProgressTime > 200) {
 						lastProgressTime = now;
 						rpc.send.scanProgress({
 							currentDir: scanStats.currentDir,
-							dirs: scanStats.dirs,
-							files: scanStats.files,
 						});
+						await Bun.sleep(1);
 					}
 				};
 
+				console.log(`[scan] Starting scanDirectoryAsync...`);
+				const startTime = Date.now();
 				try {
-					const tree = scanDirectory(targetPath, 0, 3, sendProgress);
+					const tree = await scanDirectoryAsync(targetPath, 0, 3, sendProgress);
+					const elapsed = Date.now() - startTime;
+					console.log(`[scan] Scan complete in ${elapsed}ms — dirs=${scanStats.dirs} files=${scanStats.files} treeSize=${tree.size}`);
 					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
 					const store = await loadCacheStore();
 					saveCacheStore(await upsertCacheEntry(store, entry));
-					rpc.send.scanComplete({ tree });
-					return { success: true };
+					console.log(`[scan] === RETURNING RESPONSE ===`);
+					return { success: true, rootPath: targetPath };
 				} catch (e: any) {
-					rpc.send.error({ message: e.message });
+					console.error(`[scan] ERROR:`, e);
 					return { success: false, error: e.message };
 				}
 			},
@@ -313,8 +314,8 @@ const rpc = BrowserView.defineRPC<{
 						if (found) return { children: found.children || [] };
 					}
 				}
-				const tree = scanDirectory(resolved, 0, 3);
-				return { children: tree.children || [] };
+				// No cache found — return empty instead of scanning
+				return { children: [] };
 			},
 			validatePath: async ({ dirPath }) => {
 				try {
@@ -394,11 +395,10 @@ const rpc = BrowserView.defineRPC<{
 					for (const cacheEntry of store.entries) {
 						if (removeDirFromCacheEntry(cacheEntry, resolved)) {
 							saveCacheStore(store);
-							rpc.send.scanComplete({ tree: cacheEntry.tree });
 							break;
 						}
 					}
-					return { success: true };
+					return { success: true, rootPath: store.entries[0]?.rootPath };
 				} catch (e: any) {
 					return { success: false, error: e.message };
 				}
