@@ -22,6 +22,23 @@ interface CleanableResult {
 	totalSize: number;
 }
 
+interface EntryInfo {
+	path: string;
+	name: string;
+	size: number;
+	isDir: boolean;
+	modifiedAt: number;
+	createdAt: number;
+	fileCount?: number;
+	dirCount?: number;
+	largestFile?: { name: string; size: number };
+	newestFile?: { name: string; modifiedAt: number };
+	typeDistribution?: { label: string; percentage: number; color: string }[];
+	extension?: string;
+	previewType?: "text" | "image" | "none";
+	textPreview?: string;
+}
+
 type AppRPC = {
 	bun: {
 		requests: {
@@ -36,6 +53,7 @@ type AppRPC = {
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
+			getEntryInfo: { params: { entryPath: string }; response: EntryInfo };
 		};
 		messages: {};
 	};
@@ -532,6 +550,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 		const colorIdx = entries.indexOf(entry);
 		const item = document.createElement("div");
 		item.className = "dir-item";
+		const infoIcon = `<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
 		const dirIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
 		const fileIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
 		const trashIcon = `<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
@@ -546,6 +565,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			</div>
 			<div class="dir-item-size">${formatSize(entry.size)}</div>
 			<div class="dir-item-actions">
+				<button class="btn-info" data-path="${escapeAttr(entry.path)}" title="Info">${infoIcon}</button>
 				<button class="btn-delete" data-path="${escapeAttr(entry.path)}" data-name="${escapeAttr(entry.name)}" data-size="${entry.size}">${trashIcon}</button>
 			</div>
 		`;
@@ -587,6 +607,16 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			const size = pendingDeleteSize;
 			$("deleteMessage").textContent = `Sei sicuro di voler eliminare "${name}" (${formatSize(size)})? Questa azione è irreversibile.`;
 			$("modal-delete").classList.remove("hidden");
+		});
+	});
+
+	// Info buttons
+	list.querySelectorAll(".btn-info").forEach((btn) => {
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const el = e.currentTarget as HTMLElement;
+			const path = el.dataset.path;
+			if (path) openInfoPanel(path);
 		});
 	});
 }
@@ -1079,6 +1109,147 @@ settingMaxCache.addEventListener("input", saveSettingsDebounced);
 settingMaxDepth.addEventListener("change", saveSettingsDebounced);
 settingMaxDepth.addEventListener("input", saveSettingsDebounced);
 settingDeleteMode.addEventListener("change", saveSettingsDebounced);
+
+// --- Info Panel ---
+let infoPanelOpen = false;
+
+function openInfoPanel(entryPath: string) {
+	const panel = $("infoPanel");
+	const backdrop = $("infoPanelBackdrop");
+	const body = $("infoPanelBody");
+	const title = $("infoPanelTitle");
+
+	title.textContent = "Caricamento…";
+	body.innerHTML = `<div class="info-panel-loading">Caricamento…</div>`;
+
+	panel.classList.remove("hidden");
+	backdrop.classList.remove("hidden");
+	// Force reflow then add visible class for animation
+	void panel.offsetWidth;
+	panel.classList.add("visible");
+	backdrop.classList.add("visible");
+	infoPanelOpen = true;
+
+	electrobun.rpc?.request?.getEntryInfo({ entryPath }).then((info: any) => {
+		if (!info || info.error) {
+			body.innerHTML = `<div class="info-panel-loading">Impossibile caricare le informazioni</div>`;
+			title.textContent = "Errore";
+			return;
+		}
+		title.textContent = info.name;
+		renderInfoPanelContent(info as EntryInfo);
+	}).catch(() => {
+		body.innerHTML = `<div class="info-panel-loading">Errore di connessione</div>`;
+	});
+}
+
+function closeInfoPanel() {
+	const panel = $("infoPanel");
+	const backdrop = $("infoPanelBackdrop");
+	panel.classList.remove("visible");
+	backdrop.classList.remove("visible");
+	infoPanelOpen = false;
+	setTimeout(() => {
+		panel.classList.add("hidden");
+		backdrop.classList.add("hidden");
+	}, 260);
+}
+
+function formatDate(ms: number): string {
+	const d = new Date(ms);
+	return d.toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderInfoPanelContent(info: EntryInfo) {
+	const body = $("infoPanelBody");
+	let html = "";
+
+	if (info.isDir) {
+		// Directory info
+		html += `<div class="info-section">`;
+		html += `<div class="info-section-title">Dettagli</div>`;
+		html += `<div class="info-row"><span class="info-row-label">Dimensione</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">File</span><span class="info-row-value">${info.fileCount ?? 0}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">Cartelle</span><span class="info-row-value">${info.dirCount ?? 0}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">Ultima modifica</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">Creazione</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
+		html += `</div>`;
+
+		if (info.largestFile) {
+			html += `<div class="info-section">`;
+			html += `<div class="info-section-title">File più grande</div>`;
+			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.largestFile.name)}</span><span class="info-row-value">${formatSize(info.largestFile.size)}</span></div>`;
+			html += `</div>`;
+		}
+
+		if (info.newestFile) {
+			html += `<div class="info-section">`;
+			html += `<div class="info-section-title">Modificato più di recente</div>`;
+			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.newestFile.name)}</span><span class="info-row-value">${formatDate(info.newestFile.modifiedAt)}</span></div>`;
+			html += `</div>`;
+		}
+
+		if (info.typeDistribution && info.typeDistribution.length > 0) {
+			html += `<div class="info-section">`;
+			html += `<div class="info-section-title">Distribuzione tipi</div>`;
+			html += `<div class="info-type-bar">`;
+			for (const t of info.typeDistribution) {
+				html += `<div class="info-type-bar-seg" style="width:${t.percentage}%;background:${t.color}"></div>`;
+			}
+			html += `</div>`;
+			html += `<div class="info-type-legend">`;
+			for (const t of info.typeDistribution) {
+				html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${t.color}"></span>${escapeHtml(t.label)} ${t.percentage}%</span>`;
+			}
+			html += `</div>`;
+			html += `</div>`;
+		}
+	} else {
+		// File info
+		if (info.extension) {
+			html += `<div style="margin-bottom:14px"><span class="info-ext-badge">${escapeHtml(info.extension)}</span></div>`;
+		}
+
+		html += `<div class="info-section">`;
+		html += `<div class="info-section-title">Dettagli</div>`;
+		html += `<div class="info-row"><span class="info-row-label">Dimensione</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">Ultima modifica</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">Creazione</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
+		html += `</div>`;
+
+		if (info.previewType === "text" && info.textPreview) {
+			html += `<div class="info-section">`;
+			html += `<div class="info-section-title">Anteprima</div>`;
+			html += `<pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre>`;
+			html += `</div>`;
+		} else if (info.previewType === "image") {
+			html += `<div class="info-section">`;
+			html += `<div class="info-section-title">Anteprima</div>`;
+			html += `<img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" />`;
+			html += `</div>`;
+		} else {
+			html += `<div class="info-file-icon">📄</div>`;
+		}
+	}
+
+	html += `<div class="info-section" style="margin-top:8px">`;
+	html += `<div class="info-section-title">Percorso</div>`;
+	html += `<div style="font-size:11px;color:var(--text-muted);word-break:break-all;line-height:1.5">${escapeHtml(info.path)}</div>`;
+	html += `</div>`;
+
+	body.innerHTML = html;
+}
+
+$("infoPanelClose").addEventListener("click", closeInfoPanel);
+$("infoPanelBackdrop").addEventListener("click", closeInfoPanel);
+
+// Close info panel with Escape
+document.addEventListener("keydown", (e) => {
+	if (e.key === "Escape" && infoPanelOpen) {
+		e.preventDefault();
+		closeInfoPanel();
+	}
+});
 
 // --- Init ---
 renderCacheList();

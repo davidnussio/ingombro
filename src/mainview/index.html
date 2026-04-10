@@ -142,6 +142,20 @@
 		</div>
 	</div>
 
+	<!-- Info Panel (slide-in from right) -->
+	<div id="infoPanel" class="info-panel hidden">
+		<div class="info-panel-header">
+			<span class="info-panel-title" id="infoPanelTitle">Info</span>
+			<button class="info-panel-close" id="infoPanelClose" title="Chiudi (Esc)">
+				<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+			</button>
+		</div>
+		<div class="info-panel-body" id="infoPanelBody">
+			<div class="info-panel-loading">Caricamento…</div>
+		</div>
+	</div>
+	<div id="infoPanelBackdrop" class="info-panel-backdrop hidden"></div>
+
 	<script type="module" src="views://mainview/index.js"></script>
 </body>
 </html>
