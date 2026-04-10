@@ -7,6 +7,8 @@ const it: Translations = {
 	dirNotFound: "La directory non esiste",
 
 	scanningText: "Scansione in corso...",
+	cancelScan: "Interrompi",
+	scanCancelled: "Scansione interrotta",
 
 	rescanButton: "Riscansiona",
 	backTitle: "Torna indietro",

@@ -7,6 +7,8 @@ const ja: Translations = {
 	dirNotFound: "ディレクトリが存在しません",
 
 	scanningText: "スキャン中...",
+	cancelScan: "中止",
+	scanCancelled: "スキャンが中止されました",
 
 	rescanButton: "再スキャン",
 	backTitle: "戻る",

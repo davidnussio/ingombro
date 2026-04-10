@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 // --- Progress tracking ---
 let scanStats = { dirs: 0, files: 0, currentDir: "" };
+let scanCancelled = false;
 
 // --- Resolve ~ in paths ---
 function expandPath(p: string): string {
@@ -131,6 +132,8 @@ async function scanDirectoryAsync(dirPath: string, depth: number = 0, maxDepth: 
 	const name = basename(dirPath) || dirPath;
 	const entry: DirEntry = { path: dirPath, name, size: 0, isDir: true, children: [] };
 
+	if (scanCancelled) throw new Error("SCAN_CANCELLED");
+
 	scanStats.dirs++;
 	scanStats.currentDir = dirPath;
 	await sendProgress();
@@ -138,6 +141,7 @@ async function scanDirectoryAsync(dirPath: string, depth: number = 0, maxDepth: 
 	try {
 		const items = readdirSync(dirPath, { withFileTypes: true });
 		for (const item of items) {
+			if (scanCancelled) throw new Error("SCAN_CANCELLED");
 			if (item.name.startsWith(".") || item.name === "node_modules" || item.name === ".Trash") continue;
 
 			const fullPath = join(dirPath, item.name);
@@ -386,9 +390,11 @@ function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResu
 
 	function walk(dirPath: string, depth: number) {
 		if (depth > maxDepth) return;
+		if (scanCancelled) return;
 		try {
 			const entries = readdirSync(dirPath, { withFileTypes: true });
 			for (const entry of entries) {
+				if (scanCancelled) return;
 				if (entry.name === ".Trash") continue;
 
 				const fullPath = join(dirPath, entry.name);
@@ -706,6 +712,7 @@ const rpc = BrowserView.defineRPC<{
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo | { error: string } };
+			cancelScan: { params: {}; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -733,6 +740,11 @@ const rpc = BrowserView.defineRPC<{
 					entries: unique.map((e) => ({ rootPath: e.rootPath, timestamp: e.timestamp })),
 				};
 			},
+			cancelScan: async () => {
+				console.log("[scan] Cancel requested");
+				scanCancelled = true;
+				return { success: true };
+			},
 			deleteCacheEntry: async ({ rootPath }) => {
 				const store = await loadCacheStore();
 				store.entries = store.entries.filter((e) => e.rootPath !== rootPath);
@@ -747,6 +759,7 @@ const rpc = BrowserView.defineRPC<{
 					return { success: false, error: "Directory not found" };
 				}
 
+				scanCancelled = false;
 				scanStats = { dirs: 0, files: 0, currentDir: targetPath };
 
 				let lastProgressTime = 0;
@@ -774,6 +787,10 @@ const rpc = BrowserView.defineRPC<{
 					console.log(`[scan] === RETURNING RESPONSE ===`);
 					return { success: true, rootPath: targetPath };
 				} catch (e: any) {
+					if (e.message === "SCAN_CANCELLED") {
+						console.log(`[scan] Scan cancelled by user after ${Date.now() - startTime}ms`);
+						return { success: false, error: "SCAN_CANCELLED" };
+					}
 					console.error(`[scan] ERROR:`, e);
 					return { success: false, error: e.message };
 				}
@@ -1010,3 +1027,13 @@ ApplicationMenu.setApplicationMenu([
 		],
 	},
 ]);
+
+// --- Clean shutdown: cancel active scans on quit ---
+process.on("SIGTERM", () => {
+	scanCancelled = true;
+	process.exit(0);
+});
+process.on("SIGINT", () => {
+	scanCancelled = true;
+	process.exit(0);
+});

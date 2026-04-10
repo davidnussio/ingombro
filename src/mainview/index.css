@@ -346,6 +346,11 @@ body {
 	text-overflow: ellipsis;
 	text-align: center;
 }
+.btn-cancel-scan {
+	margin-top: 20px;
+	padding: 8px 28px;
+	font-size: 13px;
+}
 
 /* Results screen */
 #screen-results {

@@ -61,6 +61,7 @@ type AppRPC = {
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo };
+			cancelScan: { params: {}; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -109,15 +110,41 @@ let totalFreedBytes: number = 0;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let currentCleanables: CleanableResult | null = null;
 let cleanableSelected: Set<string> = new Set();
+let isScanning = false;
+
+// --- Cancel scan ---
+async function cancelScan() {
+	if (!isScanning) return;
+	console.log("[fe] cancelScan requested");
+	try {
+		await electrobun.rpc?.request?.cancelScan({});
+	} catch (e) {
+		console.error("[fe] cancelScan error:", e);
+	}
+}
+
+// --- Clean shutdown: cancel any active scan before closing ---
+window.addEventListener("beforeunload", () => {
+	if (isScanning) {
+		cancelScan();
+	}
+});
 
 // --- Scan helper ---
 async function startScan(dirPath: string) {
 	showScreen("scanning");
+	isScanning = true;
 	console.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
 	try {
 		const result = await electrobun.rpc?.request?.scanDirectory({ dirPath });
 		console.log(`[fe] startScan: response received`, result);
+		isScanning = false;
 		if (!result || !result.success || !result.rootPath) {
+			if (result?.error === "SCAN_CANCELLED") {
+				showScreen("welcome");
+				renderCacheList();
+				return;
+			}
 			alert(t().errorPrefix + " " + (result?.error || t().scanFailed));
 			showScreen("welcome");
 			renderCacheList();
@@ -127,6 +154,7 @@ async function startScan(dirPath: string) {
 		detectAndShowCleanables(result.rootPath);
 	} catch (e) {
 		console.error(`[fe] startScan error:`, e);
+		isScanning = false;
 		showScreen("welcome");
 		renderCacheList();
 	}
@@ -786,6 +814,10 @@ $("btnRescan").addEventListener("click", () => {
 	startScan(dirPath);
 });
 
+$("btnCancelScan").addEventListener("click", () => {
+	cancelScan();
+});
+
 // --- Render cache list ---
 async function renderCacheList() {
 	const result = await electrobun.rpc?.request?.getCacheList({});
@@ -1121,6 +1153,7 @@ function applyTranslations() {
 
 	// Scanning screen
 	$("scanningText").textContent = tr.scanningText;
+	$("btnCancelScan").textContent = tr.cancelScan;
 
 	// Results screen
 	$("btnBack").title = tr.backTitle;

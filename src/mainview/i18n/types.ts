@@ -7,6 +7,8 @@ export interface Translations {
 
 	// Scanning
 	scanningText: string;
+	cancelScan: string;
+	scanCancelled: string;
 
 	// Results
 	rescanButton: string;
