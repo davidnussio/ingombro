@@ -17,16 +17,16 @@
 			<div class="welcome-card">
 				<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="Ingombro" />
 				<h1>Ingombro</h1>
-				<p class="welcome-desc">Analizza lo spazio su disco e pulisci le directory inutili.</p>
+				<p class="welcome-desc" id="welcomeDesc"></p>
 				<div class="scan-input-group">
-					<label for="scanPath" id="scanPathLabel">Directory da scansionare</label>
+					<label for="scanPath" id="scanPathLabel"></label>
 					<div class="autocomplete-wrapper">
 						<input type="text" id="scanPath" placeholder="~/" autocomplete="off" />
 						<span class="input-hint" id="inputHint">⌘↵</span>
 						<div id="autocompleteList" class="autocomplete-list hidden"></div>
 					</div>
 				</div>
-				<button id="btnScan" class="btn btn-primary" disabled>Scansiona</button>
+				<button id="btnScan" class="btn btn-primary" disabled></button>
 				<div id="cacheList" class="cache-list hidden"></div>
 			</div>
 		</div>
@@ -35,7 +35,7 @@
 		<div id="screen-scanning" class="screen">
 			<div class="scanning-card">
 				<div class="spinner"></div>
-				<p class="scanning-text">Scansione in corso...</p>
+				<p class="scanning-text" id="scanningText"></p>
 				<p id="scanCurrentDir" class="scan-current-dir"></p>
 			</div>
 		</div>
@@ -44,12 +44,12 @@
 		<div id="screen-results" class="screen">
 			<div class="results-header">
 				<div class="results-header-left">
-					<button id="btnBack" class="btn btn-icon" title="Torna indietro"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
-					<nav id="breadcrumb" class="breadcrumb" aria-label="Navigazione"></nav>
+					<button id="btnBack" class="btn btn-icon" title=""><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
+					<nav id="breadcrumb" class="breadcrumb" aria-label=""></nav>
 					<span id="totalSize" class="total-size"></span>
 				</div>
 				<div class="results-header-right">
-					<button id="btnRescan" class="btn btn-secondary btn-sm">Riscansiona</button>
+					<button id="btnRescan" class="btn btn-secondary btn-sm"></button>
 				</div>
 			</div>
 			<div class="results-body">
@@ -58,7 +58,7 @@
 					<div class="clean-banner-text">
 						<span id="cleanBannerMsg"></span>
 					</div>
-					<button id="btnOpenClean" class="btn btn-sm btn-accent">Vedi dettagli</button>
+					<button id="btnOpenClean" class="btn btn-sm btn-accent"></button>
 				</div>
 				<div class="viz-container" id="vizContainer">
 					<canvas id="treemapCanvas"></canvas>
@@ -72,22 +72,26 @@
 	<div class="settings-section" id="settingsSection">
 		<div class="settings-header">
 			<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-			<span>Impostazioni</span>
+			<span id="settingsHeaderText"></span>
 		</div>
 		<div class="settings-body">
 			<div class="setting-row">
-				<label for="settingMaxCache">Cache massime</label>
+				<label for="settingLang" id="settingLangLabel"></label>
+				<select id="settingLang" class="setting-select"></select>
+			</div>
+			<div class="setting-row">
+				<label for="settingMaxCache" id="settingMaxCacheLabel"></label>
 				<input type="number" id="settingMaxCache" min="1" max="50" value="10" class="setting-input-number" />
 			</div>
 			<div class="setting-row">
-				<label for="settingMaxDepth">Profondità scansione</label>
+				<label for="settingMaxDepth" id="settingMaxDepthLabel"></label>
 				<input type="number" id="settingMaxDepth" min="1" max="30" value="10" class="setting-input-number" />
 			</div>
 			<div class="setting-row">
-				<label for="settingDeleteMode">Eliminazione</label>
+				<label for="settingDeleteMode" id="settingDeleteModeLabel"></label>
 				<select id="settingDeleteMode" class="setting-select">
-					<option value="trash">Cestino</option>
-					<option value="permanent">Definitiva</option>
+					<option value="trash" id="optionTrash"></option>
+					<option value="permanent" id="optionPermanent"></option>
 				</select>
 			</div>
 		</div>
@@ -97,11 +101,11 @@
 	<div id="modal-delete" class="modal hidden">
 		<div class="modal-backdrop"></div>
 		<div class="modal-card">
-			<h3>Conferma eliminazione</h3>
+			<h3 id="deleteModalTitle"></h3>
 			<p id="deleteMessage"></p>
 			<div class="modal-actions">
-				<button id="btnCancelDelete" class="btn btn-secondary">Annulla</button>
-				<button id="btnConfirmDelete" class="btn btn-danger">Elimina</button>
+				<button id="btnCancelDelete" class="btn btn-secondary"></button>
+				<button id="btnConfirmDelete" class="btn btn-danger"></button>
 			</div>
 		</div>
 	</div>
@@ -111,23 +115,23 @@
 		<div class="modal-backdrop"></div>
 		<div class="modal-card modal-card-lg">
 			<div class="clean-modal-header">
-				<h3>🧹 Smart Clean</h3>
+				<h3 id="cleanModalTitle"></h3>
 				<span id="cleanTotalBadge" class="clean-total-badge"></span>
 			</div>
-			<p class="clean-modal-desc">Cartelle di progetto eliminabili per recuperare spazio.</p>
+			<p class="clean-modal-desc" id="cleanModalDesc"></p>
 			<div class="clean-toolbar">
 				<label class="clean-select-all">
 					<input type="checkbox" id="cleanSelectAll" checked />
-					<span>Seleziona tutto</span>
+					<span id="cleanSelectAllLabel"></span>
 				</label>
 				<span id="cleanSelectedInfo" class="clean-selected-info"></span>
 			</div>
 			<div id="cleanList" class="clean-list"></div>
 			<div class="modal-actions">
-				<button id="btnCancelClean" class="btn btn-secondary">Annulla</button>
+				<button id="btnCancelClean" class="btn btn-secondary"></button>
 				<button id="btnConfirmClean" class="btn btn-danger" disabled>
 					<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-					<span id="btnConfirmCleanText">Pulisci selezionati</span>
+					<span id="btnConfirmCleanText"></span>
 				</button>
 			</div>
 		</div>
@@ -137,8 +141,8 @@
 	<div id="freedToast" class="freed-toast hidden">
 		<div class="freed-toast-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#55efc4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
 		<div class="freed-toast-content">
-			<div class="freed-toast-just">Liberati <span id="freedJust"></span></div>
-			<div id="freedTotalRow" class="freed-toast-total hidden">Totale sessione: <span id="freedTotal"></span></div>
+			<div class="freed-toast-just"><span id="freedJustLabel"></span> <span id="freedJust"></span></div>
+			<div id="freedTotalRow" class="freed-toast-total hidden"><span id="freedTotalLabel"></span> <span id="freedTotal"></span></div>
 		</div>
 	</div>
 
@@ -146,12 +150,12 @@
 	<div id="infoPanel" class="info-panel hidden">
 		<div class="info-panel-header">
 			<span class="info-panel-title" id="infoPanelTitle">Info</span>
-			<button class="info-panel-close" id="infoPanelClose" title="Chiudi (Esc)">
+			<button class="info-panel-close" id="infoPanelClose" title="">
 				<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
 			</button>
 		</div>
 		<div class="info-panel-body" id="infoPanelBody">
-			<div class="info-panel-loading">Caricamento…</div>
+			<div class="info-panel-loading" id="infoPanelLoading"></div>
 		</div>
 	</div>
 	<div id="infoPanelBackdrop" class="info-panel-backdrop hidden"></div>

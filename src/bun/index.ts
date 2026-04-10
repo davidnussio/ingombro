@@ -352,12 +352,12 @@ const TEXT_EXTENSIONS = new Set([
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"]);
 
 const TYPE_CATEGORIES: { label: string; extensions: Set<string>; color: string }[] = [
-	{ label: "Codice", extensions: new Set([".js", ".ts", ".tsx", ".jsx", ".py", ".rb", ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".swift", ".kt", ".scala", ".lua", ".r", ".sh", ".bash", ".zsh"]), color: "#6c5ce7" },
-	{ label: "Immagini", extensions: new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico", ".tiff"]), color: "#00b894" },
-	{ label: "Documenti", extensions: new Set([".md", ".txt", ".pdf", ".doc", ".docx", ".rtf", ".csv", ".tsv"]), color: "#0984e3" },
-	{ label: "Config", extensions: new Set([".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".env", ".lock"]), color: "#fdcb6e" },
-	{ label: "Stili", extensions: new Set([".css", ".scss", ".sass", ".less", ".styl"]), color: "#e84393" },
-	{ label: "HTML", extensions: new Set([".html", ".htm", ".hbs", ".ejs", ".pug"]), color: "#e17055" },
+	{ label: "code", extensions: new Set([".js", ".ts", ".tsx", ".jsx", ".py", ".rb", ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".swift", ".kt", ".scala", ".lua", ".r", ".sh", ".bash", ".zsh"]), color: "#6c5ce7" },
+	{ label: "images", extensions: new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico", ".tiff"]), color: "#00b894" },
+	{ label: "documents", extensions: new Set([".md", ".txt", ".pdf", ".doc", ".docx", ".rtf", ".csv", ".tsv"]), color: "#0984e3" },
+	{ label: "config", extensions: new Set([".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".xml", ".env", ".lock"]), color: "#fdcb6e" },
+	{ label: "styles", extensions: new Set([".css", ".scss", ".sass", ".less", ".styl"]), color: "#e84393" },
+	{ label: "html", extensions: new Set([".html", ".htm", ".hbs", ".ejs", ".pug"]), color: "#e17055" },
 ];
 
 function getEntryInfoFromFS(entryPath: string): EntryInfo | null {
@@ -436,12 +436,12 @@ function getEntryInfoFromFS(entryPath: string): EntryInfo | null {
 					}
 					if (count > 0) catCounts.push({ label: cat.label, count, color: cat.color });
 				}
-				// "Altro" for unmatched
+				// "Other" for unmatched
 				let otherCount = 0;
 				for (const [ext, c] of Object.entries(extCounts)) {
 					if (!matched.has(ext)) otherCount += c;
 				}
-				if (otherCount > 0) catCounts.push({ label: "Altro", count: otherCount, color: "#dfe6e9" });
+				if (otherCount > 0) catCounts.push({ label: "other", count: otherCount, color: "#dfe6e9" });
 
 				catCounts.sort((a, b) => b.count - a.count);
 				info.typeDistribution = catCounts.map((c) => ({
@@ -716,7 +716,7 @@ const rpc = BrowserView.defineRPC<{
 					try {
 						const resolved = expandPath(p);
 						if (!existsSync(resolved)) {
-							errors.push(`${p}: non trovato`);
+							errors.push(`${p}: not found`);
 							continue;
 						}
 						// Get size before deleting
@@ -751,7 +751,7 @@ const rpc = BrowserView.defineRPC<{
 			},
 			getEntryInfo: async ({ entryPath }) => {
 				const info = getEntryInfoFromFS(entryPath);
-				if (!info) return { error: "Impossibile leggere le informazioni" } as any;
+				if (!info) return { error: "Cannot read entry info" } as any;
 				return info;
 			},
 		},

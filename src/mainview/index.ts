@@ -1,4 +1,8 @@
 import Electrobun, { Electroview } from "electrobun/view";
+import { initI18n, t, setLanguage, getLanguage, getAvailableLanguages } from "./i18n";
+
+// Initialize i18n before anything else
+initI18n();
 
 // --- Types ---
 interface DirEntry {
@@ -84,7 +88,7 @@ const rpc = Electroview.defineRPC<AppRPC>({
 			},
 			error: ({ message }) => {
 				console.error(`[fe] error received: ${message}`);
-				alert("Errore: " + message);
+				alert(t().errorPrefix + " " + message);
 				showScreen("welcome");
 			},
 		},
@@ -111,13 +115,12 @@ async function startScan(dirPath: string) {
 		const result = await electrobun.rpc?.request?.scanDirectory({ dirPath });
 		console.log(`[fe] startScan: response received`, result);
 		if (!result || !result.success || !result.rootPath) {
-			alert("Errore: " + (result?.error || "scansione fallita"));
+			alert(t().errorPrefix + " " + (result?.error || t().scanFailed));
 			showScreen("welcome");
 			renderCacheList();
 			return;
 		}
 		await loadTreeFromCache(result.rootPath, false);
-		// Trigger smart clean detection in background
 		detectAndShowCleanables(result.rootPath);
 	} catch (e) {
 		console.error(`[fe] startScan error:`, e);
@@ -295,18 +298,16 @@ let treemapAnimId: number | null = null;
 let skipNextAnimation = false;
 
 function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number, canvasW?: number, canvasH?: number) {
-	// Treemap area bounds (2px padding from container edge)
 	const pad = 2;
 	const containerR = 12;
-	const innerR = containerR - pad; // 10px for corner rects
+	const innerR = containerR - pad;
 	const defaultR = 4;
-	const edgeTolerance = 1; // px tolerance for edge detection
+	const edgeTolerance = 1;
 
 	for (const r of rects) {
 		ctx.fillStyle = r.color;
 		ctx.globalAlpha = 0.85 * alpha;
 
-		// Determine which edges this rect touches
 		const w = canvasW || 9999;
 		const h = canvasH || 9999;
 		const touchTop = r.y <= pad + edgeTolerance;
@@ -314,7 +315,6 @@ function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], a
 		const touchBottom = (r.y + r.h) >= h - pad - edgeTolerance;
 		const touchRight = (r.x + r.w) >= w - pad - edgeTolerance;
 
-		// Per-corner radius: [top-left, top-right, bottom-right, bottom-left]
 		const radii: [number, number, number, number] = [
 			(touchTop && touchLeft) ? innerR : defaultR,
 			(touchTop && touchRight) ? innerR : defaultR,
@@ -352,17 +352,11 @@ function renderTreemap(entries: DirEntry[]) {
 	const shouldAnimate = !skipNextAnimation && prevRects.length > 0;
 	skipNextAnimation = false;
 
-	// Capture previous frame before resizing canvas
-	let prevSnapshot: ImageBitmap | null = null;
+	let prevOffscreen: OffscreenCanvas | null = null;
 	if (shouldAnimate && canvas.width > 0 && canvas.height > 0) {
-		const offscreen = new OffscreenCanvas(canvas.width, canvas.height);
-		const offCtx = offscreen.getContext("2d")!;
+		prevOffscreen = new OffscreenCanvas(canvas.width, canvas.height);
+		const offCtx = prevOffscreen.getContext("2d")!;
 		offCtx.drawImage(canvas, 0, 0);
-		// Store as ImageData for sync drawing
-		prevSnapshot = null; // we'll use offscreen directly
-		var prevOffscreen = offscreen;
-		var prevW = parseFloat(canvas.style.width);
-		var prevH = parseFloat(canvas.style.height);
 	}
 
 	canvas.width = rect.width * dpr;
@@ -382,7 +376,6 @@ function renderTreemap(entries: DirEntry[]) {
 		return;
 	}
 
-	// Animate crossfade
 	if (treemapAnimId) cancelAnimationFrame(treemapAnimId);
 	const duration = 250;
 	const start = performance.now();
@@ -390,20 +383,17 @@ function renderTreemap(entries: DirEntry[]) {
 	function animateFrame(now: number) {
 		const elapsed = now - start;
 		const t = Math.min(elapsed / duration, 1);
-		// Ease out cubic
 		const ease = 1 - Math.pow(1 - t, 3);
 
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-		// Draw old frame fading out
 		if (prevOffscreen) {
 			ctx.globalAlpha = 1 - ease;
 			ctx.drawImage(prevOffscreen, 0, 0, prevOffscreen.width, prevOffscreen.height, 0, 0, canvas.width, canvas.height);
 			ctx.globalAlpha = 1;
 		}
 
-		// Draw new frame fading in with slight scale
 		ctx.save();
 		ctx.scale(dpr, dpr);
 		const scale = 0.97 + 0.03 * ease;
@@ -419,7 +409,6 @@ function renderTreemap(entries: DirEntry[]) {
 			treemapAnimId = requestAnimationFrame(animateFrame);
 		} else {
 			treemapAnimId = null;
-			// Final clean render
 			ctx.setTransform(1, 0, 0, 1, 0, 0);
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
 			ctx.scale(dpr, dpr);
@@ -487,7 +476,6 @@ treemapCanvas.addEventListener("click", async (e) => {
 	const my = e.clientY - rect.top;
 	const hit = treemapRects.find((r) => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h);
 	if (hit && hit.entry.isDir) {
-		// If children are not loaded yet, fetch them on demand
 		if (!hit.entry.children || hit.entry.children.length === 0) {
 			try {
 				const res = await electrobun.rpc?.request?.getChildren({ dirPath: hit.entry.path });
@@ -573,7 +561,6 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 		if (entry.isDir) {
 			item.addEventListener("click", async (e) => {
 				if ((e.target as HTMLElement).classList.contains("btn-delete")) return;
-				// If children are not loaded yet (deep directories), fetch them on demand
 				if (!entry.children || entry.children.length === 0) {
 					try {
 						const res = await electrobun.rpc?.request?.getChildren({ dirPath: entry.path });
@@ -581,7 +568,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 							entry.children = res.children;
 							entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
 						} else {
-							return; // truly empty directory, nothing to navigate into
+							return;
 						}
 					} catch {
 						return;
@@ -605,7 +592,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			pendingDeleteSize = Number(el.dataset.size || 0);
 			const name = el.dataset.name || "";
 			const size = pendingDeleteSize;
-			$("deleteMessage").textContent = `Sei sicuro di voler eliminare "${name}" (${formatSize(size)})? Questa azione è irreversibile.`;
+			$("deleteMessage").textContent = t().deleteConfirmMessage(name, formatSize(size));
 			$("modal-delete").classList.remove("hidden");
 		});
 	});
@@ -643,7 +630,7 @@ async function detectAndShowCleanables(rootPath: string) {
 	const banner = $("cleanBanner");
 	banner.classList.remove("hidden");
 	banner.classList.add("clean-banner-scanning");
-	$("cleanBannerMsg").textContent = "Analisi progetti in corso…";
+	$("cleanBannerMsg").textContent = t().cleanAnalyzing;
 	$("btnOpenClean").classList.add("hidden");
 
 	try {
@@ -657,7 +644,7 @@ async function detectAndShowCleanables(rootPath: string) {
 		cleanableSelected = new Set(result.items.map((i) => i.path));
 		banner.classList.remove("clean-banner-scanning");
 		const count = result.items.length;
-		$("cleanBannerMsg").textContent = `${formatSize(result.totalSize)} recuperabili da ${count} cartell${count === 1 ? "a" : "e"} di progetto`;
+		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), count);
 		$("btnOpenClean").classList.remove("hidden");
 	} catch (e) {
 		console.error("[cleanables] detection error:", e);
@@ -712,12 +699,11 @@ function updateCleanSelection() {
 	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
 	const count = selectedItems.length;
 
-	$("cleanSelectedInfo").textContent = `${count} selezionat${count === 1 ? "a" : "e"} · ${formatSize(totalSelected)}`;
+	$("cleanSelectedInfo").textContent = `${t().cleanSelected(count)} · ${formatSize(totalSelected)}`;
 	const btn = $("btnConfirmClean") as HTMLButtonElement;
 	btn.disabled = count === 0;
-	$("btnConfirmCleanText").textContent = count > 0 ? `Pulisci selezionati (${formatSize(totalSelected)})` : "Pulisci selezionati";
+	$("btnConfirmCleanText").textContent = count > 0 ? t().cleanSelectedWithSize(formatSize(totalSelected)) : t().cleanSelectedWithSize("");
 
-	// Sync select-all checkbox
 	const selectAll = document.getElementById("cleanSelectAll") as HTMLInputElement;
 	selectAll.checked = count === currentCleanables.items.length;
 	selectAll.indeterminate = count > 0 && count < currentCleanables.items.length;
@@ -753,7 +739,7 @@ $("btnConfirmClean").addEventListener("click", async () => {
 	const paths = Array.from(cleanableSelected);
 	const btn = $("btnConfirmClean") as HTMLButtonElement;
 	btn.disabled = true;
-	$("btnConfirmCleanText").textContent = "Pulizia in corso…";
+	$("btnConfirmCleanText").textContent = t().cleaningInProgress;
 
 	try {
 		const result = await electrobun.rpc?.request?.batchDelete({ paths });
@@ -767,10 +753,8 @@ $("btnConfirmClean").addEventListener("click", async () => {
 			if (result.errors.length > 0) {
 				console.error("[cleanables] batch delete errors:", result.errors);
 			}
-			// Refresh the view
 			if (currentTree) {
 				await loadTreeFromCache(currentTree.path, true);
-				// Re-detect cleanables
 				detectAndShowCleanables(currentTree.path);
 			}
 		}
@@ -814,9 +798,10 @@ async function renderCacheList() {
 		return;
 	}
 	container.classList.remove("hidden");
+	const dateLang = getLanguage() === "it" ? "it-IT" : "en-US";
 	for (const entry of result.entries) {
 		const date = new Date(entry.timestamp);
-		const dateStr = date.toLocaleDateString("it-IT", {
+		const dateStr = date.toLocaleDateString(dateLang, {
 			day: "numeric", month: "short",
 			hour: "2-digit", minute: "2-digit",
 		});
@@ -828,10 +813,10 @@ async function renderCacheList() {
 				<span class="cache-card-date">${dateStr}</span>
 			</div>
 			<div class="cache-card-actions">
-				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">Apri cache</button>
-				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">Scansiona</button>
+				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">${t().openCache}</button>
+				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">${t().scanCache}</button>
 			</div>
-			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="Rimuovi"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="${t().removeCache}"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 		`;
 		container.appendChild(card);
 	}
@@ -883,11 +868,10 @@ $("btnConfirmDelete").addEventListener("click", async () => {
 
 	const result = await electrobun.rpc?.request?.deleteEntry({ entryPath: path });
 	if (result && !result.success) {
-		alert("Errore durante l'eliminazione: " + (result.error || "sconosciuto"));
+		alert(t().deleteError + " " + (result.error || t().unknownError));
 	} else {
 		totalFreedBytes += deletedSize;
 		showFreedToast(deletedSize);
-		// Reload tree from cache to reflect deletion
 		if (result?.rootPath) {
 			await loadTreeFromCache(result.rootPath, true);
 		}
@@ -911,7 +895,6 @@ function showFreedToast(justFreed: number) {
 
 	toast.classList.remove("hidden");
 	toast.classList.remove("toast-exit");
-	// Force reflow for re-trigger
 	void toast.offsetWidth;
 	toast.classList.add("toast-enter");
 
@@ -944,18 +927,18 @@ let validateDebounce: ReturnType<typeof setTimeout> | null = null;
 async function validatePath(dirPath: string) {
 	if (!dirPath.trim()) {
 		btnScan.disabled = true;
-		scanPathLabel.textContent = "Directory da scansionare";
+		scanPathLabel.textContent = t().scanLabel;
 		scanPathLabel.style.color = "";
 		return;
 	}
 	const result = await electrobun.rpc?.request?.validatePath({ dirPath: dirPath.trim() });
 	if (result?.valid) {
 		btnScan.disabled = false;
-		scanPathLabel.textContent = "Directory da scansionare";
+		scanPathLabel.textContent = t().scanLabel;
 		scanPathLabel.style.color = "";
 	} else {
 		btnScan.disabled = true;
-		scanPathLabel.textContent = "La directory non esiste";
+		scanPathLabel.textContent = t().dirNotFound;
 		scanPathLabel.style.color = "var(--danger)";
 	}
 }
@@ -1012,7 +995,6 @@ scanPathInput.addEventListener("keydown", (e) => {
 	const items = acList.querySelectorAll(".autocomplete-item");
 	const isOpen = !acList.classList.contains("hidden") && items.length > 0;
 
-	// Cmd+Enter (Mac) / Ctrl+Enter (other) → avvia scansione direttamente
 	if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 		e.preventDefault();
 		acList.classList.add("hidden");
@@ -1033,7 +1015,6 @@ scanPathInput.addEventListener("keydown", (e) => {
 			fetchSuggestions(val + "/");
 			validatePath(val + "/");
 		} else {
-			// Close autocomplete and let the scan happen
 			acList.classList.add("hidden");
 		}
 		return;
@@ -1070,7 +1051,6 @@ function updateAcActive(items: NodeListOf<Element>) {
 }
 
 scanPathInput.addEventListener("blur", () => {
-	// Small delay to allow click on item
 	setTimeout(() => acList.classList.add("hidden"), 150);
 });
 
@@ -1082,6 +1062,7 @@ scanPathInput.addEventListener("focus", () => {
 const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
 const settingMaxDepth = $("settingMaxDepth") as HTMLInputElement;
 const settingDeleteMode = $("settingDeleteMode") as HTMLSelectElement;
+const settingLang = $("settingLang") as HTMLSelectElement;
 let settingsSaveDebounce: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSettingsUI() {
@@ -1110,6 +1091,76 @@ settingMaxDepth.addEventListener("change", saveSettingsDebounced);
 settingMaxDepth.addEventListener("input", saveSettingsDebounced);
 settingDeleteMode.addEventListener("change", saveSettingsDebounced);
 
+// --- Language selector ---
+function populateLanguageSelector() {
+	settingLang.innerHTML = "";
+	for (const lang of getAvailableLanguages()) {
+		const opt = document.createElement("option");
+		opt.value = lang.code;
+		opt.textContent = lang.label;
+		settingLang.appendChild(opt);
+	}
+	settingLang.value = getLanguage();
+}
+
+settingLang.addEventListener("change", () => {
+	setLanguage(settingLang.value);
+	applyTranslations();
+	// Re-render dynamic content
+	renderCacheList();
+});
+
+// --- Apply all translations to static DOM elements ---
+function applyTranslations() {
+	const tr = t();
+
+	// HTML lang attribute
+	document.documentElement.lang = getLanguage();
+
+	// Welcome screen
+	$("welcomeDesc").textContent = tr.welcomeDesc;
+	$("scanPathLabel").textContent = tr.scanLabel;
+	btnScan.textContent = tr.scanButton;
+
+	// Scanning screen
+	$("scanningText").textContent = tr.scanningText;
+
+	// Results screen
+	$("btnBack").title = tr.backTitle;
+	$("breadcrumb").setAttribute("aria-label", tr.navigation);
+	$("btnRescan").textContent = tr.rescanButton;
+	$("btnOpenClean").textContent = tr.cleanDetails;
+
+	// Settings
+	$("settingsHeaderText").textContent = tr.settingsTitle;
+	$("settingLangLabel").textContent = tr.language;
+	$("settingMaxCacheLabel").textContent = tr.maxCache;
+	$("settingMaxDepthLabel").textContent = tr.scanDepth;
+	$("settingDeleteModeLabel").textContent = tr.deleteMode;
+	$("optionTrash").textContent = tr.deleteModeTrash;
+	$("optionPermanent").textContent = tr.deleteModePermanent;
+
+	// Delete modal
+	$("deleteModalTitle").textContent = tr.deleteConfirmTitle;
+	$("btnCancelDelete").textContent = tr.cancel;
+	$("btnConfirmDelete").textContent = tr.deleteButton;
+
+	// Clean modal
+	$("cleanModalTitle").textContent = tr.smartCleanTitle;
+	$("cleanModalDesc").textContent = tr.cleanModalDesc;
+	$("cleanSelectAllLabel").textContent = tr.selectAll;
+	$("btnCancelClean").textContent = tr.cancel;
+	$("btnConfirmCleanText").textContent = tr.cleanSelectedWithSize("");
+
+	// Toast
+	$("freedJustLabel").textContent = tr.freedJust;
+	$("freedTotalLabel").textContent = tr.freedSessionTotal;
+
+	// Info panel
+	$("infoPanelClose").title = tr.closeEsc;
+	$("infoPanelLoading").textContent = tr.loading;
+}
+
 // --- Info Panel ---
 let infoPanelOpen = false;
 
@@ -1119,12 +1170,11 @@ function openInfoPanel(entryPath: string) {
 	const body = $("infoPanelBody");
 	const title = $("infoPanelTitle");
 
-	title.textContent = "Caricamento…";
-	body.innerHTML = `<div class="info-panel-loading">Caricamento…</div>`;
+	title.textContent = t().loading;
+	body.innerHTML = `<div class="info-panel-loading">${t().loading}</div>`;
 
 	panel.classList.remove("hidden");
 	backdrop.classList.remove("hidden");
-	// Force reflow then add visible class for animation
 	void panel.offsetWidth;
 	panel.classList.add("visible");
 	backdrop.classList.add("visible");
@@ -1132,14 +1182,14 @@ function openInfoPanel(entryPath: string) {
 
 	electrobun.rpc?.request?.getEntryInfo({ entryPath }).then((info: any) => {
 		if (!info || info.error) {
-			body.innerHTML = `<div class="info-panel-loading">Impossibile caricare le informazioni</div>`;
-			title.textContent = "Errore";
+			body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`;
+			title.textContent = t().errorTitle;
 			return;
 		}
 		title.textContent = info.name;
 		renderInfoPanelContent(info as EntryInfo);
 	}).catch(() => {
-		body.innerHTML = `<div class="info-panel-loading">Errore di connessione</div>`;
+		body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`;
 	});
 }
 
@@ -1157,74 +1207,79 @@ function closeInfoPanel() {
 
 function formatDate(ms: number): string {
 	const d = new Date(ms);
-	return d.toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+	const dateLang = getLanguage() === "it" ? "it-IT" : "en-US";
+	return d.toLocaleDateString(dateLang, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function renderInfoPanelContent(info: EntryInfo) {
 	const body = $("infoPanelBody");
+	const tr = t();
 	let html = "";
 
 	if (info.isDir) {
-		// Directory info
 		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">Dettagli</div>`;
-		html += `<div class="info-row"><span class="info-row-label">Dimensione</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">File</span><span class="info-row-value">${info.fileCount ?? 0}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">Cartelle</span><span class="info-row-value">${info.dirCount ?? 0}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">Ultima modifica</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">Creazione</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
+		html += `<div class="info-section-title">${tr.details}</div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.files}</span><span class="info-row-value">${info.fileCount ?? 0}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.folders}</span><span class="info-row-value">${info.dirCount ?? 0}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
 		html += `</div>`;
 
 		if (info.largestFile) {
 			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">File più grande</div>`;
+			html += `<div class="info-section-title">${tr.largestFile}</div>`;
 			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.largestFile.name)}</span><span class="info-row-value">${formatSize(info.largestFile.size)}</span></div>`;
 			html += `</div>`;
 		}
 
 		if (info.newestFile) {
 			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">Modificato più di recente</div>`;
+			html += `<div class="info-section-title">${tr.newestModified}</div>`;
 			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.newestFile.name)}</span><span class="info-row-value">${formatDate(info.newestFile.modifiedAt)}</span></div>`;
 			html += `</div>`;
 		}
 
 		if (info.typeDistribution && info.typeDistribution.length > 0) {
+			const typeLabelMap: Record<string, string> = {
+				code: tr.typeCode, images: tr.typeImages, documents: tr.typeDocuments,
+				config: tr.typeConfig, styles: tr.typeStyles, html: tr.typeHTML, other: tr.typeOther,
+			};
 			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">Distribuzione tipi</div>`;
+			html += `<div class="info-section-title">${tr.typeDistribution}</div>`;
 			html += `<div class="info-type-bar">`;
-			for (const t of info.typeDistribution) {
-				html += `<div class="info-type-bar-seg" style="width:${t.percentage}%;background:${t.color}"></div>`;
+			for (const td of info.typeDistribution) {
+				html += `<div class="info-type-bar-seg" style="width:${td.percentage}%;background:${td.color}"></div>`;
 			}
 			html += `</div>`;
 			html += `<div class="info-type-legend">`;
-			for (const t of info.typeDistribution) {
-				html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${t.color}"></span>${escapeHtml(t.label)} ${t.percentage}%</span>`;
+			for (const td of info.typeDistribution) {
+				const label = typeLabelMap[td.label] || td.label;
+				html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${td.color}"></span>${escapeHtml(label)} ${td.percentage}%</span>`;
 			}
 			html += `</div>`;
 			html += `</div>`;
 		}
 	} else {
-		// File info
 		if (info.extension) {
 			html += `<div style="margin-bottom:14px"><span class="info-ext-badge">${escapeHtml(info.extension)}</span></div>`;
 		}
 
 		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">Dettagli</div>`;
-		html += `<div class="info-row"><span class="info-row-label">Dimensione</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">Ultima modifica</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">Creazione</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
+		html += `<div class="info-section-title">${tr.details}</div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
+		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
 		html += `</div>`;
 
 		if (info.previewType === "text" && info.textPreview) {
 			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">Anteprima</div>`;
+			html += `<div class="info-section-title">${tr.preview}</div>`;
 			html += `<pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre>`;
 			html += `</div>`;
 		} else if (info.previewType === "image") {
 			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">Anteprima</div>`;
+			html += `<div class="info-section-title">${tr.preview}</div>`;
 			html += `<img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" />`;
 			html += `</div>`;
 		} else {
@@ -1233,7 +1288,7 @@ function renderInfoPanelContent(info: EntryInfo) {
 	}
 
 	html += `<div class="info-section" style="margin-top:8px">`;
-	html += `<div class="info-section-title">Percorso</div>`;
+	html += `<div class="info-section-title">${tr.path}</div>`;
 	html += `<div style="font-size:11px;color:var(--text-muted);word-break:break-all;line-height:1.5">${escapeHtml(info.path)}</div>`;
 	html += `</div>`;
 
@@ -1243,7 +1298,6 @@ function renderInfoPanelContent(info: EntryInfo) {
 $("infoPanelClose").addEventListener("click", closeInfoPanel);
 $("infoPanelBackdrop").addEventListener("click", closeInfoPanel);
 
-// Close info panel with Escape
 document.addEventListener("keydown", (e) => {
 	if (e.key === "Escape" && infoPanelOpen) {
 		e.preventDefault();
@@ -1252,5 +1306,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // --- Init ---
+populateLanguageSelector();
+applyTranslations();
 renderCacheList();
 loadSettingsUI();
