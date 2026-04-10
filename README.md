@@ -20,36 +20,59 @@ Ingombro is a macOS desktop app built with [Electrobun](https://electrobun.dev/)
 
 Proportional visualization of disk usage. Click any folder to drill down with smooth transition animations.
 
-![Treemap and directory list](images/ingombro-2.png)
+![Treemap and directory list](images/ingombro-3.png)
 
-### File preview
+### Path autocomplete
 
-Side panel with file and folder details: size, dates, type distribution, text and image previews.
+Start typing a path and get instant directory suggestions. Supports `~` expansion and nested paths.
 
-![File preview](images/ingombro-3.png)
+![Path autocomplete](images/ingombro-2.png)
 
-### Deep navigation
+### File and folder preview
 
-Clickable breadcrumb to jump to any level. On-demand loading of subdirectories for fast scans even on huge directory trees.
+Side panel with detailed info: size, dates, largest file, most recently modified, file type distribution chart, and text/image previews.
 
-![Deep navigation](images/ingombro-4.png)
+![File preview](images/ingombro-6.png)
 
 ### Smart Clean
 
-Automatic detection of removable folders in development projects:
+Automatic detection of removable folders across your projects. The banner and item list update as you navigate into subdirectories, showing only what's relevant to the current folder.
 
-| Type | Detected folders |
+| Category | Detected folders |
 |---|---|
-| Node / Bun | `node_modules` |
-| Python | `__pycache__`, `.venv`, `venv`, `.tox` |
-| Rust | `target` |
-| iOS | `Pods` |
-| Build | `build`, `dist`, `.next`, `.nuxt` |
-| Cache | `.cache`, `.parcel-cache` |
+| Node / Bun | `node_modules`, `.parcel-cache`, `.turbo` |
+| Frameworks | `.next`, `.nuxt`, `.svelte-kit`, `.astro`, `.angular`, `.docusaurus` |
+| Python | `__pycache__`, `.venv`, `venv`, `.tox`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `htmlcov` |
+| Rust / Java | `target`, `.gradle` |
+| Elixir | `_build`, `deps`, `.elixir_ls` |
+| Zig / Haskell | `zig-cache`, `zig-out`, `.stack-work` |
+| Ruby / PHP / Go | `vendor`, `.bundle` |
+| iOS / Flutter | `Pods`, `.dart_tool`, `.pub-cache` |
+| Build artifacts | `build`, `dist`, `.cache` |
+| Infrastructure | `.terraform`, `.cdk.out`, `.serverless` |
+| AI / ML | `.ipynb_checkpoints`, `mlruns`, `wandb`, `lightning_logs` |
+| Design | `RECOVER`, `.affinity-autosave`, `Sketch Previews` |
+| Video | `Media Cache`, `Render Cache`, `Render Files`, `proxy` |
+| Music / DAW | `Bounced Files`, `Freeze Files`, `Rendered`, `fl_studio_cache` |
+| macOS / Windows | `.DS_Store`, `Thumbs.db`, `Desktop.ini` |
 
-Select the folders to clean and remove them in batch with a single click.
+Filter by project type, select items individually or in batch, and clean with a single click.
 
-![Smart Clean](images/ingombro-5.png)
+![Smart Clean — all items](images/ingombro-4.png)
+
+![Smart Clean — filtered](images/ingombro-5.png)
+
+### Cached analysis results
+
+Scan results and Smart Clean analysis are cached. Reopening a directory from cache loads instantly without re-scanning. A new scan automatically invalidates the previous cache.
+
+### Internationalization
+
+7 languages supported out of the box:
+
+🇮🇹 Italiano · 🇬🇧 English · 🇪🇸 Español · 🇫🇷 Français · 🇩🇪 Deutsch · 🇧🇷 Português · 🇯🇵 日本語
+
+Automatic detection of system language with manual override.
 
 ## Requirements
 
@@ -68,6 +91,9 @@ bun run dev
 
 # Canary build
 bun run build:canary
+
+# Stable build
+bun run build
 ```
 
 ## Installation
@@ -90,6 +116,7 @@ Download the latest release from the [Releases](../../releases) page and drag th
 
 Accessible from the home screen, saved in `~/.ingombro/settings.json`:
 
+- **Language** — UI language (auto-detected or manual)
 - **Max cache entries** — number of scans kept in cache
 - **Scan depth** — maximum recursion levels
 - **Delete mode** — macOS Trash or permanent deletion
