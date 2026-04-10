@@ -115,6 +115,30 @@ let cleanableSelected: Set<string> = new Set();
 let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
 let isScanning = false;
 
+// Returns cleanables scoped to the current navigation path
+function getScopedCleanables(): CleanableResult | null {
+	if (!currentCleanables || currentCleanables.items.length === 0) return currentCleanables;
+	const current = navigationStack[navigationStack.length - 1];
+	if (!current || !currentTree || current.path === currentTree.path) return currentCleanables;
+	const prefix = current.path.endsWith("/") ? current.path : current.path + "/";
+	const items = currentCleanables.items.filter((i) => i.path.startsWith(prefix));
+	return { items, totalSize: items.reduce((s, i) => s + i.size, 0) };
+}
+
+// Update the clean banner to reflect the current navigation scope
+function updateCleanBanner() {
+	const banner = $("cleanBanner");
+	const scoped = getScopedCleanables();
+	if (!scoped || scoped.items.length === 0) {
+		banner.classList.add("hidden");
+		return;
+	}
+	banner.classList.remove("hidden");
+	banner.classList.remove("clean-banner-scanning");
+	$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(scoped.totalSize), scoped.items.length);
+	$("btnOpenClean").classList.remove("hidden");
+}
+
 // --- Cancel scan ---
 async function cancelScan() {
 	if (!isScanning) return;
@@ -564,6 +588,7 @@ function renderResults(entry: DirEntry) {
 	const children = (entry.children || []).filter((c) => c.size > 0);
 	renderTreemap(children);
 	renderDirList(children, entry.size);
+	updateCleanBanner();
 }
 
 function renderDirList(entries: DirEntry[], parentSize: number) {
@@ -700,12 +725,13 @@ async function detectAndShowCleanables(rootPath: string, useCache: boolean = tru
 }
 
 function openCleanModal() {
-	if (!currentCleanables || currentCleanables.items.length === 0) return;
+	const scoped = getScopedCleanables();
+	if (!scoped || scoped.items.length === 0) return;
 	const modal = $("modal-clean");
 
-	$("cleanTotalBadge").textContent = formatSize(currentCleanables.totalSize);
+	$("cleanTotalBadge").textContent = formatSize(scoped.totalSize);
 	// Pre-select only low/medium risk items; high risk unchecked by default
-	cleanableSelected = new Set(currentCleanables.items.filter((i) => i.risk !== "high").map((i) => i.path));
+	cleanableSelected = new Set(scoped.items.filter((i) => i.risk !== "high").map((i) => i.path));
 	activeCleanFilters = new Set(); // reset filters
 
 	buildCleanFilters();
@@ -719,11 +745,12 @@ function openCleanModal() {
 function buildCleanFilters() {
 	const container = $("cleanFilters");
 	container.innerHTML = "";
-	if (!currentCleanables) return;
+	const scoped = getScopedCleanables();
+	if (!scoped) return;
 
 	// Collect unique tags: group by projectType → set of folderNames
 	const tagMap = new Map<string, Set<string>>();
-	for (const item of currentCleanables.items) {
+	for (const item of scoped.items) {
 		if (!tagMap.has(item.projectType)) tagMap.set(item.projectType, new Set());
 		tagMap.get(item.projectType)!.add(item.folderName);
 	}
@@ -783,9 +810,10 @@ function syncFilterChipStates() {
 }
 
 function getFilteredCleanItems(): CleanableItem[] {
-	if (!currentCleanables) return [];
-	if (activeCleanFilters.size === 0) return currentCleanables.items;
-	return currentCleanables.items.filter((i) => activeCleanFilters.has(`${i.projectType}|${i.folderName}`));
+	const scoped = getScopedCleanables();
+	if (!scoped) return [];
+	if (activeCleanFilters.size === 0) return scoped.items;
+	return scoped.items.filter((i) => activeCleanFilters.has(`${i.projectType}|${i.folderName}`));
 }
 
 function renderCleanList() {
@@ -794,7 +822,7 @@ function renderCleanList() {
 	const items = getFilteredCleanItems();
 
 	// Deseleziona gli elementi non visibili
-	if (currentCleanables && activeCleanFilters.size > 0) {
+	if (getScopedCleanables() && activeCleanFilters.size > 0) {
 		const visiblePaths = new Set(items.map((i) => i.path));
 		for (const path of [...cleanableSelected]) {
 			if (!visiblePaths.has(path)) {
@@ -832,7 +860,8 @@ function renderCleanList() {
 }
 
 function updateCleanSelection() {
-	if (!currentCleanables) return;
+	const scoped = getScopedCleanables();
+	if (!scoped) return;
 	const visibleItems = getFilteredCleanItems();
 	const selectedItems = visibleItems.filter((i) => cleanableSelected.has(i.path));
 	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
@@ -851,7 +880,7 @@ function updateCleanSelection() {
 
 $("cleanSelectAll").addEventListener("change", () => {
 	const checked = (document.getElementById("cleanSelectAll") as HTMLInputElement).checked;
-	if (!currentCleanables) return;
+	if (!getScopedCleanables()) return;
 	const visibleItems = getFilteredCleanItems();
 	const visiblePaths = new Set(visibleItems.map((i) => i.path));
 	const checkboxes = $("cleanList").querySelectorAll<HTMLInputElement>("input[type='checkbox']");
