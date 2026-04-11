@@ -98,19 +98,34 @@ bun run build
 
 ## Installation
 
-Download the latest release from the [Releases](../../releases) page and drag the app into your Applications folder.
+### Homebrew (recommended)
+
+```bash
+brew install davidnussio/tap/ingombro
+```
 
 > ⚠️ **macOS Security Notice**
 >
-> Ingombro is not signed with an Apple Developer certificate, so macOS may show a **"damaged and can't be opened"** warning.
+> Ingombro is not signed with an Apple Developer certificate (signing costs $99/year).
+> macOS Gatekeeper may show a **"damaged and can't be opened"** warning.
 >
-> To fix this, open Terminal and run:
+> As an alternative, you can install (or reinstall) with the `--no-quarantine` flag to skip the quarantine attribute entirely:
 >
 > ```bash
-> xattr -d com.apple.quarantine /Applications/Ingombro.app
+> HOMEBREW_CASK_OPTS="--no-quarantine" brew reinstall --cask davidnussio/tap/ingombro
 > ```
->
-> Learn more about [macOS Gatekeeper](https://support.apple.com/en-us/guide/security/sec5599b66df/web).
+
+### Manual download
+
+Download the latest release from the [Releases](../../releases) page and drag the app into your Applications folder.
+
+If macOS blocks the app, remove the quarantine attribute manually:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Ingombro.app
+```
+
+Learn more about [macOS Gatekeeper](https://support.apple.com/en-us/guide/security/sec5599b66df/web).
 
 ## Settings
 
