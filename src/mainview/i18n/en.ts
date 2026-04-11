@@ -28,6 +28,7 @@ const en: Translations = {
 
 	deleteConfirmTitle: "Confirm deletion",
 	deleteConfirmMessage: (name, size) => `Are you sure you want to delete "${name}" (${size})? This action is irreversible.`,
+	deleteConfirmMessageTrash: (name, size) => `Are you sure you want to delete "${name}" (${size})? The item will be moved to Trash.`,
 	deleteButton: "Delete",
 
 	freedJust: "Freed",

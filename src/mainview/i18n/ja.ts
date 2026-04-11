@@ -28,6 +28,7 @@ const ja: Translations = {
 
 	deleteConfirmTitle: "削除の確認",
 	deleteConfirmMessage: (name, size) => `「${name}」(${size}) を削除してもよろしいですか？この操作は元に戻せません。`,
+	deleteConfirmMessageTrash: (name, size) => `「${name}」(${size}) を削除してもよろしいですか？ゴミ箱に移動されます。`,
 	deleteButton: "削除",
 
 	freedJust: "解放済み",

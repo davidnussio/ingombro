@@ -654,7 +654,10 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			pendingDeleteSize = Number(el.dataset.size || 0);
 			const name = el.dataset.name || "";
 			const size = pendingDeleteSize;
-			$("deleteMessage").textContent = t().deleteConfirmMessage(name, formatSize(size));
+			const isTrash = settingDeleteMode.value === "trash";
+			$("deleteMessage").textContent = isTrash
+				? t().deleteConfirmMessageTrash(name, formatSize(size))
+				: t().deleteConfirmMessage(name, formatSize(size));
 			$("modal-delete").classList.remove("hidden");
 		});
 	});
@@ -1476,6 +1479,34 @@ document.addEventListener("keydown", (e) => {
 	if (e.key === "Escape" && infoPanelOpen) {
 		e.preventDefault();
 		closeInfoPanel();
+		return;
+	}
+
+	// T005 — Global keyboard shortcuts
+	const activeScreen = document.querySelector(".screen.active");
+	const isResults = activeScreen?.id === "screen-results";
+	const isModalOpen = !$("modal-delete").classList.contains("hidden") || !$("modal-clean").classList.contains("hidden");
+	const isInputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLSelectElement;
+
+	if (isModalOpen || isInputFocused) return;
+
+	if (e.key === "Backspace" && isResults) {
+		e.preventDefault();
+		if (navigationStack.length > 1) {
+			navigationStack.pop();
+			renderResults(navigationStack[navigationStack.length - 1]!);
+		} else {
+			showScreen("welcome");
+			renderCacheList();
+		}
+		return;
+	}
+
+	if (e.key === "Escape" && isResults) {
+		e.preventDefault();
+		showScreen("welcome");
+		renderCacheList();
+		return;
 	}
 });
 

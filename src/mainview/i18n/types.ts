@@ -32,6 +32,7 @@ export interface Translations {
 	// Delete modal
 	deleteConfirmTitle: string;
 	deleteConfirmMessage: (name: string, size: string) => string;
+	deleteConfirmMessageTrash: (name: string, size: string) => string;
 	deleteButton: string;
 
 	// Toast

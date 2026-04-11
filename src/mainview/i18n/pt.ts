@@ -28,6 +28,7 @@ const pt: Translations = {
 
 	deleteConfirmTitle: "Confirmar exclusão",
 	deleteConfirmMessage: (name, size) => `Tem certeza de que deseja excluir "${name}" (${size})? Esta ação é irreversível.`,
+	deleteConfirmMessageTrash: (name, size) => `Tem certeza de que deseja excluir "${name}" (${size})? O item será movido para a Lixeira.`,
 	deleteButton: "Excluir",
 
 	freedJust: "Liberados",

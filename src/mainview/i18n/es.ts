@@ -28,6 +28,7 @@ const es: Translations = {
 
 	deleteConfirmTitle: "Confirmar eliminación",
 	deleteConfirmMessage: (name, size) => `¿Estás seguro de que quieres eliminar "${name}" (${size})? Esta acción es irreversible.`,
+	deleteConfirmMessageTrash: (name, size) => `¿Estás seguro de que quieres eliminar "${name}" (${size})? El elemento se moverá a la Papelera.`,
 	deleteButton: "Eliminar",
 
 	freedJust: "Liberados",

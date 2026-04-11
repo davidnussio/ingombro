@@ -28,6 +28,7 @@ const de: Translations = {
 
 	deleteConfirmTitle: "Löschen bestätigen",
 	deleteConfirmMessage: (name, size) => `Sind Sie sicher, dass Sie „${name}" (${size}) löschen möchten? Diese Aktion ist unwiderruflich.`,
+	deleteConfirmMessageTrash: (name, size) => `Sind Sie sicher, dass Sie „${name}" (${size}) löschen möchten? Das Element wird in den Papierkorb verschoben.`,
 	deleteButton: "Löschen",
 
 	freedJust: "Freigegeben",

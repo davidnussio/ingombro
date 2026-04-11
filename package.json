@@ -1,6 +1,6 @@
 {
-	"name": "electrobun-disk-scanner",
-	"version": "0.2.0",
+	"name": "ingombro",
+	"version": "1.0.0",
 	"type": "module",
 	"description": "Disk space analyzer and cleaner",
 	"scripts": {
