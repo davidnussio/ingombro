@@ -64,6 +64,8 @@ type AppRPC = {
 			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo };
 			cancelScan: { params: {}; response: { success: boolean } };
+			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
+			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -240,6 +242,7 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 		settings.classList.remove("hidden");
 		$("cleanBanner").classList.add("hidden");
 		currentCleanables = null;
+		renderStatsWidget();
 	} else {
 		settings.classList.add("hidden");
 	}
@@ -923,6 +926,7 @@ $("btnConfirmClean").addEventListener("click", async () => {
 			if (result.deletedSize > 0) {
 				totalFreedBytes += result.deletedSize;
 				showFreedToast(result.deletedSize);
+				electrobun.rpc?.request?.recordDeletion({ freedBytes: result.deletedSize, deleteCount: result.deletedCount });
 			}
 			if (result.errors.length > 0) {
 				console.error("[cleanables] batch delete errors:", result.errors);
@@ -1049,6 +1053,7 @@ $("btnConfirmDelete").addEventListener("click", async () => {
 	} else {
 		totalFreedBytes += deletedSize;
 		showFreedToast(deletedSize);
+		electrobun.rpc?.request?.recordDeletion({ freedBytes: deletedSize, deleteCount: 1 });
 		if (result?.rootPath) {
 			await loadTreeFromCache(result.rootPath, true);
 		}
@@ -1090,6 +1095,11 @@ window.addEventListener("resize", () => {
 		const children = (current.children || []).filter((c) => c.size > 0);
 		skipNextAnimation = true;
 		renderTreemap(children);
+	}
+	// Re-render stats chart on resize if on welcome screen
+	const activeScreen = document.querySelector(".screen.active");
+	if (activeScreen?.id === "screen-welcome" && !$("statsWidget").classList.contains("hidden")) {
+		renderStatsWidget();
 	}
 });
 
@@ -1510,8 +1520,130 @@ document.addEventListener("keydown", (e) => {
 	}
 });
 
+// --- Stats Widget (Canvas 2D sparkline bar chart) ---
+let statsAnimId2: number | null = null;
+
+async function renderStatsWidget() {
+	const widget = $("statsWidget");
+	const tr = t();
+
+	let stats: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } | null = null;
+	try {
+		stats = await electrobun.rpc?.request?.getStats({ days: 14 }) ?? null;
+	} catch { /* ignore */ }
+
+	if (!stats || stats.totalFreed === 0) {
+		widget.classList.add("hidden");
+		if (statsAnimId2) { cancelAnimationFrame(statsAnimId2); statsAnimId2 = null; }
+		return;
+	}
+
+	widget.classList.remove("hidden");
+	$("statsWidgetTitle").textContent = tr.statsTitle;
+	$("statsWidgetTotal").textContent = formatSize(stats.totalFreed);
+
+	// Build 14-day array (fill gaps with 0)
+	const days: { date: string; freedBytes: number }[] = [];
+	const now = new Date();
+	for (let i = 13; i >= 0; i--) {
+		const d = new Date(now);
+		d.setDate(d.getDate() - i);
+		const dateStr = d.toISOString().slice(0, 10);
+		const entry = stats.entries.find((e) => e.date === dateStr);
+		days.push({ date: dateStr, freedBytes: entry?.freedBytes ?? 0 });
+	}
+
+	const maxBytes = Math.max(...days.map((d) => d.freedBytes), 1);
+
+	// Setup canvas
+	const container = $("statsChart");
+	let canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
+	if (!canvas) {
+		canvas = document.createElement("canvas");
+		container.appendChild(canvas);
+	}
+
+	const rect = container.getBoundingClientRect();
+	const dpr = window.devicePixelRatio || 1;
+	const w = rect.width;
+	const h = rect.height;
+	if (w === 0 || h === 0) return;
+
+	canvas.width = w * dpr;
+	canvas.height = h * dpr;
+	canvas.style.width = w + "px";
+	canvas.style.height = h + "px";
+
+	const ctx = canvas.getContext("2d")!;
+	const barGap = 3;
+	const barWidth = (w - barGap * (days.length - 1)) / days.length;
+
+	// Animate entrance
+	if (statsAnimId2) cancelAnimationFrame(statsAnimId2);
+	const animStart = performance.now();
+	const animDuration = 500;
+
+	function drawFrame(now: number) {
+		const elapsed = now - animStart;
+		const globalProgress = Math.min(elapsed / animDuration, 1);
+
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		ctx.clearRect(0, 0, canvas!.width, canvas!.height);
+		ctx.scale(dpr, dpr);
+
+		for (let i = 0; i < days.length; i++) {
+			const d = days[i]!;
+			const normalizedH = d.freedBytes > 0 ? (d.freedBytes / maxBytes) * h : 0;
+
+			const delay = i * 20;
+			const barProgress = Math.max(0, Math.min((elapsed - delay) / (animDuration * 0.7), 1));
+			const ease = 1 - Math.pow(1 - barProgress, 3);
+			const barH = Math.max(normalizedH > 0 ? 2 : 0, normalizedH * ease);
+
+			const x = i * (barWidth + barGap);
+			const y = h - barH;
+
+			if (d.freedBytes > 0) {
+				const intensity = d.freedBytes / maxBytes;
+				const r = Math.round(108 + (85 - 108) * intensity);
+				const g = Math.round(92 + (239 - 92) * intensity);
+				const b = Math.round(231 + (196 - 231) * intensity);
+				ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
+			} else {
+				ctx.fillStyle = "rgba(255,255,255,0.06)";
+			}
+
+			const radius = Math.min(2, barWidth / 2, barH / 2);
+			ctx.beginPath();
+			ctx.moveTo(x + radius, y);
+			ctx.lineTo(x + barWidth - radius, y);
+			ctx.quadraticCurveTo(x + barWidth, y, x + barWidth, y + radius);
+			ctx.lineTo(x + barWidth, y + barH);
+			ctx.lineTo(x, y + barH);
+			ctx.lineTo(x, y + radius);
+			ctx.quadraticCurveTo(x, y, x + radius, y);
+			ctx.closePath();
+			ctx.fill();
+
+			if (d.freedBytes === 0) {
+				ctx.fillStyle = "rgba(255,255,255,0.06)";
+				ctx.fillRect(x, h - 2, barWidth, 2);
+			}
+		}
+
+		if (globalProgress < 1) {
+			statsAnimId2 = requestAnimationFrame(drawFrame);
+		} else {
+			statsAnimId2 = null;
+		}
+	}
+
+	statsAnimId2 = requestAnimationFrame(drawFrame);
+}
+
 // --- Init ---
 populateLanguageSelector();
 applyTranslations();
 renderCacheList();
 loadSettingsUI();
+renderStatsWidget();

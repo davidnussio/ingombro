@@ -81,6 +81,10 @@ const pt: Translations = {
 	typeStyles: "Estilos",
 	typeHTML: "HTML",
 	typeOther: "Outros",
+
+	statsTitle: "Espaço liberado",
+	statsTotal: "Total",
+	statsNoData: "Nenhuma limpeza registrada",
 };
 
 export default pt;

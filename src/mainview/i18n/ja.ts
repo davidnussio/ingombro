@@ -81,6 +81,10 @@ const ja: Translations = {
 	typeStyles: "スタイル",
 	typeHTML: "HTML",
 	typeOther: "その他",
+
+	statsTitle: "解放済みスペース",
+	statsTotal: "合計",
+	statsNoData: "クリーンアップの記録なし",
 };
 
 export default ja;

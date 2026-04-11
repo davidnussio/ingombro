@@ -14,20 +14,27 @@
 	<div id="app">
 		<!-- Welcome screen -->
 		<div id="screen-welcome" class="screen active">
-			<div class="welcome-card">
-				<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="Ingombro" />
-				<h1>Ingombro</h1>
-				<p class="welcome-desc" id="welcomeDesc"></p>
-				<div class="scan-input-group">
-					<label for="scanPath" id="scanPathLabel"></label>
-					<div class="autocomplete-wrapper">
-						<input type="text" id="scanPath" placeholder="~/" autocomplete="off" />
-						<span class="input-hint" id="inputHint">⌘↵</span>
-						<div id="autocompleteList" class="autocomplete-list hidden"></div>
+			<div class="welcome-main">
+				<div class="welcome-card">
+					<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="Ingombro" />
+					<h1>Ingombro</h1>
+					<p class="welcome-desc" id="welcomeDesc"></p>
+					<div class="scan-input-group">
+						<label for="scanPath" id="scanPathLabel"></label>
+						<div class="autocomplete-wrapper">
+							<input type="text" id="scanPath" placeholder="~/" autocomplete="off" />
+							<span class="input-hint" id="inputHint">⌘↵</span>
+							<div id="autocompleteList" class="autocomplete-list hidden"></div>
+						</div>
 					</div>
+					<button id="btnScan" class="btn btn-primary" disabled></button>
+					<div id="cacheList" class="cache-list hidden"></div>
 				</div>
-				<button id="btnScan" class="btn btn-primary" disabled></button>
-				<div id="cacheList" class="cache-list hidden"></div>
+			</div>
+			<div id="statsWidget" class="stats-widget hidden">
+				<span class="stats-widget-label" id="statsWidgetTitle"></span>
+				<span class="stats-widget-total" id="statsWidgetTotal"></span>
+				<div class="stats-widget-chart" id="statsChart"></div>
 			</div>
 		</div>
 
@@ -67,6 +74,56 @@
 				<div class="dir-list" id="dirList"></div>
 			</div>
 		</div>
+	</div>
+
+	<!-- Stats widget (fixed top-right) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<div class="stats-widget-header">
+			<span class="stats-widget-title" id="statsWidgetTitle"></span>
+			<span class="stats-widget-total" id="statsWidgetTotal"></span>
+		</div>
+		<div class="stats-widget-chart" id="statsChart"></div>
+	</div>
+
+	<!-- Stats widget (fixed top-right) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<div class="stats-widget-header">
+			<span class="stats-widget-title" id="statsWidgetTitle"></span>
+			<span class="stats-widget-total" id="statsWidgetTotal"></span>
+		</div>
+		<div class="stats-widget-chart" id="statsChart"></div>
+	</div>
+
+	<!-- Stats widget (fixed bottom-left) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<div class="stats-widget-left">
+			<span class="stats-widget-total" id="statsWidgetTotal"></span>
+			<span class="stats-widget-label" id="statsWidgetTitle"></span>
+		</div>
+		<div class="stats-widget-chart" id="statsChart"></div>
+	</div>
+
+	<!-- Stats widget (fixed bottom-left) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<div class="stats-widget-left">
+			<span class="stats-widget-total" id="statsWidgetTotal"></span>
+			<span class="stats-widget-label" id="statsWidgetTitle"></span>
+		</div>
+		<div class="stats-widget-chart" id="statsChart"></div>
+	</div>
+
+	<!-- Stats widget (fixed bottom-center) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<span class="stats-widget-label" id="statsWidgetTitle"></span>
+		<span class="stats-widget-total" id="statsWidgetTotal"></span>
+		<div class="stats-widget-chart" id="statsChart"></div>
+	</div>
+
+	<!-- Stats widget (fixed bottom-center) -->
+	<div id="statsWidget" class="stats-widget hidden">
+		<span class="stats-widget-label" id="statsWidgetTitle"></span>
+		<span class="stats-widget-total" id="statsWidgetTotal"></span>
+		<div class="stats-widget-chart" id="statsChart"></div>
 	</div>
 
 	<!-- Settings (fixed bottom-right) -->

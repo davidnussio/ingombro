@@ -81,6 +81,10 @@ const en: Translations = {
 	typeStyles: "Styles",
 	typeHTML: "HTML",
 	typeOther: "Other",
+
+	statsTitle: "Space freed",
+	statsTotal: "Total",
+	statsNoData: "No cleanup recorded yet",
 };
 
 export default en;

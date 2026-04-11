@@ -93,4 +93,9 @@ export interface Translations {
 	typeStyles: string;
 	typeHTML: string;
 	typeOther: string;
+
+	// Stats widget
+	statsTitle: string;
+	statsTotal: string;
+	statsNoData: string;
 }

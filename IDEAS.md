@@ -41,3 +41,7 @@ Rilevare vecchi `.dmg`, `.pkg`, `.zip` installer in `~/Downloads` più vecchi di
 ## 10. Space-over-time chart
 
 Tracciare lo spazio liberato tra le sessioni e mostrare un piccolo grafico storico nella home screen. `totalFreedBytes` esiste già per sessione — persistendolo si ottiene un soddisfacente "hai liberato 47 GB questo mese".
+
+## 11. Security issues
+
+Trovare i file che possono contenere secrets
