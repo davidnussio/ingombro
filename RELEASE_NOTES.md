@@ -1,6 +1,31 @@
-# Ingombro v1.0.0 🎉
+# Ingombro v1.1.0 — Secrets Detection & Envsec Integration 🔐
 
 ---
+
+## ✨ What's New
+
+### Secrets detection
+Smart Clean now detects sensitive files left in your projects:
+- `.env` files (with smart filtering of `.env.example`, `.env.template`, etc.)
+- Credential files (`credentials.json`, `serviceAccountKey.json`, `.npmrc`, `.pypirc`)
+- Private keys (`.pem`, `.key`, `.p12`, `.pfx`, `.jks`, `.keystore`)
+- Content scanning for AWS keys, GitHub tokens, OpenAI keys, Stripe secrets, database URLs, PEM blocks, and more
+- Dedicated "Secrets" filter chip with distinct styling in the Smart Clean modal
+
+### Envsec integration
+- Import `.env` files directly into [envsec](https://github.com/AmpereComputing/envsec) from the Smart Clean list
+- Inline import form with environment name input
+- PRO badge shown when envsec SDK is not available
+
+### UI improvements
+- Fixed badge and size column alignment in the Smart Clean list
+- Action buttons now consistently spaced even when envsec button is absent
+- Reordered action buttons: reveal in Finder first, envsec import second
+
+---
+
+<details>
+<summary>v1.0.0 🎉</summary>
 
 ## ✨ What's New
 
@@ -32,29 +57,7 @@
 - **7 languages**: 🇮🇹 🇬🇧 🇪🇸 🇫🇷 🇩🇪 🇧🇷 🇯🇵
 - **Keyboard shortcuts**: `Backspace` (back), `Esc` (home), `⌘↵` (scan)
 
----
-
-## ⚠️ macOS Security Notice
-
-Ingombro is not signed with an Apple Developer certificate. If macOS shows a "damaged and can't be opened" warning, run:
-
-```bash
-xattr -d com.apple.quarantine /Applications/Ingombro.app
-```
-
----
-
-## 📥 Installation
-
-Download the `.app` from the assets below and drag it into your Applications folder.
-
-Or via Homebrew:
-
-```bash
-brew install davidnussio/tap/ingombro
-```
-
----
+</details>
 
 <details>
 <summary>v0.2.0 — Enhanced Smart Clean 🧹</summary>
@@ -90,3 +93,25 @@ brew install davidnussio/tap/ingombro
 - **7 languages**: 🇮🇹 🇬🇧 🇪🇸 🇫🇷 🇩🇪 🇧🇷 🇯🇵
 
 </details>
+
+---
+
+## ⚠️ macOS Security Notice
+
+Ingombro is not signed with an Apple Developer certificate. If macOS shows a "damaged and can't be opened" warning, run:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Ingombro.app
+```
+
+---
+
+## 📥 Installation
+
+Download the `.app` from the assets below and drag it into your Applications folder.
+
+Or via Homebrew:
+
+```bash
+brew install davidnussio/tap/ingombro
+```
