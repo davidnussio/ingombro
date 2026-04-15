@@ -890,6 +890,8 @@ const rpc = BrowserView.defineRPC<{
 			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
 			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
 			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
+			checkEnvsecAvailable: { params: {}; response: { available: boolean } };
+			importEnvToEnvsec: { params: { filePath: string; context: string }; response: { success: boolean; imported: number; error?: string } };
 		};
 		messages: {};
 	};
@@ -1211,6 +1213,65 @@ const rpc = BrowserView.defineRPC<{
 					return { success: true };
 				} catch {
 					return { success: false };
+				}
+			},
+			checkEnvsecAvailable: async () => {
+				try {
+					const { EnvsecClient } = await import("@envsec/sdk");
+					const client = await EnvsecClient.create({ context: "__envsec_check__" });
+					await client.close();
+					return { available: true };
+				} catch {
+					return { available: false };
+				}
+			},
+			importEnvToEnvsec: async ({ filePath, context }) => {
+				try {
+					const resolved = expandPath(filePath);
+					const content = readFileSync(resolved, "utf-8");
+					// Parse .env file
+					const entries: [string, string][] = [];
+					for (const line of content.split("\n")) {
+						const trimmed = line.trim();
+						if (!trimmed || trimmed.startsWith("#")) continue;
+						const eqIdx = trimmed.indexOf("=");
+						if (eqIdx < 1) continue;
+						const key = trimmed.slice(0, eqIdx).trim();
+						let value = trimmed.slice(eqIdx + 1).trim();
+						// Strip surrounding quotes
+						if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+							value = value.slice(1, -1);
+						}
+						if (key && value) entries.push([key, value]);
+					}
+					if (entries.length === 0) {
+						return { success: false, imported: 0, error: "No valid entries found in file" };
+					}
+					const { EnvsecClient } = await import("@envsec/sdk");
+					const client = await EnvsecClient.create({ context });
+					let imported = 0;
+					for (const [key, value] of entries) {
+						await client.set(key, value);
+						imported++;
+					}
+					await client.close();
+					// Delete the .env file after successful import
+					rmSync(resolved, { force: true });
+					// Remove from cache tree
+					const store = await loadCacheStore();
+					let cacheModified = false;
+					for (const cacheEntry of store.entries) {
+						if (removeDirFromCacheEntry(cacheEntry, resolved)) {
+							cacheModified = true;
+							break;
+						}
+					}
+					if (cacheModified) saveCacheStore(store);
+					console.log(`[envsec] Imported ${imported} secrets from ${resolved} to context "${context}"`);
+					return { success: true, imported };
+				} catch (e: any) {
+					console.error("[envsec] Import error:", e);
+					return { success: false, imported: 0, error: e.message };
 				}
 			},
 		},

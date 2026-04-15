@@ -927,7 +927,7 @@ body {
 	color: var(--text-muted);
 	white-space: nowrap;
 	flex-shrink: 0;
-	min-width: 60px;
+	width: 60px;
 	text-align: right;
 }
 .clean-item-type {
@@ -938,6 +938,9 @@ body {
 	border-radius: 10px;
 	white-space: nowrap;
 	flex-shrink: 0;
+	min-width: 90px;
+	text-align: center;
+	box-sizing: border-box;
 }
 .clean-item-type-secrets {
 	color: #e17055;
@@ -966,6 +969,126 @@ body {
 	background: rgba(255,255,255,0.08);
 	color: var(--text);
 	border-color: var(--text-muted);
+}
+.clean-item-actions {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+	min-width: 52px;
+}
+.clean-item .btn-envsec {
+	background: none;
+	border: 1px solid rgba(108, 92, 231, 0.35);
+	border-radius: 6px;
+	color: #a29bfe;
+	cursor: pointer;
+	padding: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	transition: all 0.15s;
+	opacity: 0;
+}
+.clean-item:hover .btn-envsec {
+	opacity: 1;
+}
+.clean-item .btn-envsec:hover {
+	background: rgba(108, 92, 231, 0.12);
+	color: #6c5ce7;
+	border-color: #6c5ce7;
+}
+.clean-item .btn-envsec:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+.btn-envsec-disabled {
+	opacity: 1 !important;
+	position: relative;
+}
+.btn-envsec-disabled .envsec-pro-badge {
+	position: absolute;
+	top: -6px;
+	right: -8px;
+	font-size: 7px;
+	font-weight: 800;
+	letter-spacing: 0.5px;
+	background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+	color: white;
+	padding: 1px 4px;
+	border-radius: 4px;
+	line-height: 1.2;
+}
+/* Envsec import inline form */
+.envsec-import-form {
+	position: absolute;
+	bottom: 60px;
+	left: 16px;
+	right: 16px;
+	background: var(--surface);
+	border: 1px solid rgba(108, 92, 231, 0.35);
+	border-radius: 10px;
+	padding: 14px 16px;
+	z-index: 10;
+	box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.envsec-import-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: #a29bfe;
+	font-weight: 600;
+	font-size: 13px;
+	margin-bottom: 8px;
+}
+.envsec-import-file {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-bottom: 10px;
+	word-break: break-all;
+}
+.envsec-import-label {
+	font-size: 11px;
+	color: var(--text-muted);
+	display: block;
+	margin-bottom: 4px;
+}
+.envsec-import-input {
+	width: 100%;
+	padding: 6px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: var(--bg);
+	color: var(--text);
+	font-size: 13px;
+	font-family: inherit;
+	outline: none;
+	transition: border-color 0.15s;
+	box-sizing: border-box;
+}
+.envsec-import-input:focus {
+	border-color: #6c5ce7;
+}
+.envsec-import-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 10px;
+}
+.envsec-confirm-btn {
+	background: #6c5ce7 !important;
+	border-color: #6c5ce7 !important;
+	color: white !important;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.envsec-confirm-btn:hover {
+	background: #5a4bd1 !important;
+}
+.envsec-confirm-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 .btn-danger .icon {
 	margin-right: 4px;

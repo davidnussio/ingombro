@@ -67,6 +67,8 @@ type AppRPC = {
 			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
 			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
 			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
+			checkEnvsecAvailable: { params: {}; response: { available: boolean } };
+			importEnvToEnvsec: { params: { filePath: string; context: string }; response: { success: boolean; imported: number; error?: string } };
 		};
 		messages: {};
 	};
@@ -117,6 +119,7 @@ let currentCleanables: CleanableResult | null = null;
 let cleanableSelected: Set<string> = new Set();
 let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
 let isScanning = false;
+let envsecAvailable: boolean | null = null; // null = not checked yet
 
 // Returns cleanables scoped to the current navigation path
 function getScopedCleanables(): CleanableResult | null {
@@ -741,6 +744,18 @@ function openCleanModal() {
 	cleanableSelected = new Set(scoped.items.filter((i) => i.risk !== "high").map((i) => i.path));
 	activeCleanFilters = new Set(); // reset filters
 
+	// Check envsec availability (async, updates buttons after)
+	const hasEnvFiles = scoped.items.some((i) => i.category === "secrets" && i.folderName.startsWith(".env"));
+	if (hasEnvFiles && envsecAvailable === null) {
+		electrobun.rpc?.request?.checkEnvsecAvailable({}).then((res) => {
+			envsecAvailable = res?.available ?? false;
+			renderCleanList(); // re-render with updated button states
+		});
+	}
+
+	// Hide envsec form if open from previous session
+	$("envsecImportForm").classList.add("hidden");
+
 	buildCleanFilters();
 	renderCleanList();
 
@@ -870,6 +885,8 @@ function renderCleanList() {
 		row.className = `clean-item clean-risk-${item.risk}`;
 		const isChecked = cleanableSelected.has(item.path);
 		const titleAttr = item.note ? ` title="${escapeAttr(item.note === "sensitiveDataFound" ? t().sensitiveDataFound : item.note)}"` : "";
+		const isEnvFile = item.category === "secrets" && item.folderName.startsWith(".env");
+		const envsecDisabled = isEnvFile && !envsecAvailable;
 		row.innerHTML = `
 			<input type="checkbox" ${isChecked ? "checked" : ""} data-path="${escapeAttr(item.path)}" />
 			<div class="clean-item-info"${titleAttr}>
@@ -878,7 +895,10 @@ function renderCleanList() {
 			</div>
 			<div class="clean-item-type${item.category === "secrets" ? " clean-item-type-secrets" : ""}">${item.category === "secrets" ? "🔑 " : ""}${escapeHtml(item.projectType)}</div>
 			<div class="clean-item-size">${formatSize(item.size)}</div>
-			<button class="btn-reveal" data-reveal-path="${escapeAttr(item.path)}" title="${escapeAttr(t().revealInFinder)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
+			<div class="clean-item-actions">
+				${isEnvFile ? `<button class="btn-envsec${envsecDisabled ? " btn-envsec-disabled" : ""}" ${envsecDisabled ? "disabled" : ""} data-envsec-path="${escapeAttr(item.path)}" data-envsec-project="${escapeAttr(item.projectPath)}" data-envsec-name="${escapeAttr(item.folderName)}" data-envsec-size="${item.size}" title="${escapeAttr(envsecDisabled ? t().envsecNotAvailable : t().importToEnvsec)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>${envsecDisabled ? '<span class="envsec-pro-badge">PRO</span>' : ""}</button>` : ""}
+				<button class="btn-reveal" data-reveal-path="${escapeAttr(item.path)}" title="${escapeAttr(t().revealInFinder)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
+			</div>
 		`;
 		const cb = row.querySelector("input")!;
 		cb.addEventListener("change", () => {
@@ -895,6 +915,19 @@ function renderCleanList() {
 			e.stopPropagation();
 			electrobun.rpc?.request?.revealInFinder({ filePath: item.path });
 		});
+		const envsecBtn = row.querySelector(".btn-envsec");
+		if (envsecBtn && !envsecBtn.hasAttribute("disabled")) {
+			envsecBtn.addEventListener("click", (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				openEnvsecImportForm(
+					envsecBtn.getAttribute("data-envsec-path")!,
+					envsecBtn.getAttribute("data-envsec-project")!,
+					envsecBtn.getAttribute("data-envsec-name")!,
+					Number(envsecBtn.getAttribute("data-envsec-size") || 0),
+				);
+			});
+		}
 		list.appendChild(row);
 	}
 	updateCleanSelection();
@@ -918,6 +951,71 @@ function updateCleanSelection() {
 	selectAll.checked = visibleItems.length > 0 && visibleSelected === visibleItems.length;
 	selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visibleItems.length;
 }
+
+// --- Envsec import form ---
+let pendingEnvsecPath: string | null = null;
+let pendingEnvsecSize: number = 0;
+
+function openEnvsecImportForm(filePath: string, projectPath: string, fileName: string, fileSize: number) {
+	pendingEnvsecPath = filePath;
+	pendingEnvsecSize = fileSize;
+	const form = $("envsecImportForm");
+	$("envsecImportFile").textContent = `${projectPath}/${fileName}`;
+	// Derive default context
+	const projectDir = projectPath.split("/").pop() || "project";
+	const envSuffix = fileName.replace(/^\.env\.?/, "").toLowerCase() || "dev";
+	const contextInput = $("envsecContextInput") as HTMLInputElement;
+	contextInput.value = `${projectDir}.${envSuffix}`;
+	form.classList.remove("hidden");
+	contextInput.focus();
+	contextInput.select();
+}
+
+function closeEnvsecImportForm() {
+	$("envsecImportForm").classList.add("hidden");
+	pendingEnvsecPath = null;
+	pendingEnvsecSize = 0;
+}
+
+async function confirmEnvsecImport() {
+	if (!pendingEnvsecPath) return;
+	const context = ($("envsecContextInput") as HTMLInputElement).value.trim();
+	if (!context) return;
+	const filePath = pendingEnvsecPath;
+	const fileSize = pendingEnvsecSize;
+	const confirmBtn = $("btnEnvsecConfirm") as HTMLButtonElement;
+	confirmBtn.disabled = true;
+	$("btnEnvsecConfirmText").textContent = t().envsecImporting;
+	try {
+		const result = await electrobun.rpc?.request?.importEnvToEnvsec({ filePath, context });
+		if (result?.success) {
+			closeEnvsecImportForm();
+			showFreedToast(fileSize);
+			totalFreedBytes += fileSize;
+			electrobun.rpc?.request?.recordDeletion({ freedBytes: fileSize, deleteCount: 1 });
+			// Refresh the view
+			if (currentTree) {
+				await loadTreeFromCache(currentTree.path, true);
+				detectAndShowCleanables(currentTree.path, false);
+			}
+			$("modal-clean").classList.add("hidden");
+		} else {
+			alert(t().envsecImportError + (result?.error ? `: ${result.error}` : ""));
+		}
+	} catch {
+		alert(t().envsecImportError);
+	} finally {
+		confirmBtn.disabled = false;
+		$("btnEnvsecConfirmText").textContent = t().envsecConfirmImport;
+	}
+}
+
+$("btnEnvsecCancel").addEventListener("click", closeEnvsecImportForm);
+$("btnEnvsecConfirm").addEventListener("click", confirmEnvsecImport);
+$("envsecContextInput").addEventListener("keydown", (e) => {
+	if (e.key === "Enter") confirmEnvsecImport();
+	if (e.key === "Escape") closeEnvsecImportForm();
+});
 
 $("cleanSelectAll").addEventListener("change", () => {
 	const checked = (document.getElementById("cleanSelectAll") as HTMLInputElement).checked;
@@ -1374,6 +1472,12 @@ function applyTranslations() {
 	$("cleanSelectAllLabel").textContent = tr.selectAll;
 	$("btnCancelClean").textContent = tr.cancel;
 	$("btnConfirmCleanText").textContent = tr.cleanSelectedWithSize("");
+
+	// Envsec import form
+	$("envsecImportTitle").textContent = tr.envsecImportTitle;
+	$("envsecContextLabel").textContent = tr.envsecContextPrompt;
+	$("btnEnvsecCancel").textContent = tr.cancel;
+	$("btnEnvsecConfirmText").textContent = tr.envsecConfirmImport;
 
 	// Toast
 	$("freedJustLabel").textContent = tr.freedJust;

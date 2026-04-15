@@ -76,6 +76,14 @@ const ja: Translations = {
 
 	sensitiveDataFound: "隠すべき機密データが見つかりました",
 	revealInFinder: "Finderで表示",
+	importToEnvsec: "envsecにインポート",
+	envsecImportSuccess: (count, context) => `${count}件のシークレットをコンテキスト「${context}」にインポートし、ファイルを削除しました`,
+	envsecImportError: "envsecへのインポート中にエラーが発生しました",
+	envsecNotAvailable: "envsecがインストールされていません。インストール: brew install davidnussio/homebrew-tap/envsec",
+	envsecContextPrompt: "envsecコンテキスト名（例: myapp.dev）:",
+	envsecImportTitle: "envsecにインポート",
+	envsecConfirmImport: "インポートして削除",
+	envsecImporting: "インポート中…",
 
 	typeCode: "コード",
 	typeImages: "画像",

@@ -76,6 +76,14 @@ const en: Translations = {
 
 	sensitiveDataFound: "Sensitive data found that should be hidden",
 	revealInFinder: "Reveal in Finder",
+	importToEnvsec: "Import to envsec",
+	envsecImportSuccess: (count, context) => `${count} secrets imported to context "${context}" and file deleted`,
+	envsecImportError: "Error importing to envsec",
+	envsecNotAvailable: "envsec is not installed. Install with: brew install davidnussio/homebrew-tap/envsec",
+	envsecContextPrompt: "envsec context name (e.g. myapp.dev):",
+	envsecImportTitle: "Import to envsec",
+	envsecConfirmImport: "Import & delete",
+	envsecImporting: "Importing…",
 
 	typeCode: "Code",
 	typeImages: "Images",

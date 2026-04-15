@@ -88,6 +88,14 @@ export interface Translations {
 	// Sensitive data
 	sensitiveDataFound: string;
 	revealInFinder: string;
+	importToEnvsec: string;
+	envsecImportSuccess: (count: number, context: string) => string;
+	envsecImportError: string;
+	envsecNotAvailable: string;
+	envsecContextPrompt: string;
+	envsecImportTitle: string;
+	envsecConfirmImport: string;
+	envsecImporting: string;
 
 	// Type categories
 	typeCode: string;
