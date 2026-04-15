@@ -1349,3 +1349,16 @@ body {
 	width: 100% !important;
 	height: 100% !important;
 }
+
+/* Version label */
+.version-label {
+	position: fixed;
+	bottom: 16px;
+	left: 20px;
+	z-index: 50;
+	font-size: 11px;
+	color: var(--text-muted);
+	opacity: 0.5;
+	user-select: none;
+	-webkit-app-region: no-drag;
+}

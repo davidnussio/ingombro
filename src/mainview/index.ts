@@ -1852,3 +1852,14 @@ applyTranslations();
 renderCacheList();
 loadSettingsUI();
 renderStatsWidget();
+
+// --- Version label ---
+(async () => {
+	try {
+		const info = await electrobun.rpc?.request?.getAppVersion({});
+		const label = document.getElementById("versionLabel");
+		if (label && info?.version) {
+			label.textContent = `v${info.version}`;
+		}
+	} catch {}
+})();
