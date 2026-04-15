@@ -1,5 +1,5 @@
 import { BrowserView, BrowserWindow, Screen, ApplicationMenu } from "electrobun/bun";
-import { statSync, readdirSync, rmSync, mkdirSync } from "fs";
+import { statSync, readdirSync, rmSync, mkdirSync, readFileSync } from "fs";
 import { join, basename, resolve, extname } from "path";
 import { homedir } from "os";
 import { $ } from "bun";
@@ -280,7 +280,7 @@ function getDirSizeShallow(dirPath: string): number {
 
 // --- Smart Clean: cleanable folder detection ---
 type RiskLevel = "low" | "medium" | "high";
-type Category = "dev" | "ml" | "office" | "design" | "video" | "music";
+type Category = "dev" | "ml" | "office" | "design" | "video" | "music" | "secrets";
 
 interface CleanableItem {
 	path: string;
@@ -433,6 +433,71 @@ const CLEANABLE_NAMES = new Set(Object.keys(CLEANABLE_RULES));
 // Aggiungi "vendor" per la disambiguazione runtime
 CLEANABLE_NAMES.add("vendor");
 
+// --- Sensitive file detection ---
+// Suffixes that indicate a template/example file (safe to commit, no real secrets)
+const ENV_SAFE_SUFFIXES = new Set([
+	".example", ".sample", ".template", ".dist", ".defaults", ".schema", ".doc", ".bak",
+]);
+
+function isEnvSensitive(name: string): boolean {
+	// Must start with .env
+	if (!name.startsWith(".env")) return false;
+	// Bare ".env" is always sensitive
+	if (name === ".env") return true;
+	// .env.something — check if the suffix is a safe/template pattern
+	const suffix = name.slice(4); // everything after ".env"
+	if (ENV_SAFE_SUFFIXES.has(suffix.toLowerCase())) return false;
+	return true;
+}
+
+// File names that are always considered sensitive (regardless of content)
+const SENSITIVE_FILE_NAMES = new Set([
+	"credentials.json", "service-account.json", "serviceAccountKey.json",
+	".npmrc", ".pypirc",
+]);
+
+// Extensions for files that may contain secrets (checked by content)
+const SENSITIVE_CHECK_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"]);
+
+// Patterns that indicate sensitive data inside files
+const SENSITIVE_CONTENT_PATTERNS: RegExp[] = [
+	/AKIA[0-9A-Z]{16}/,                          // AWS Access Key ID
+	/aws_secret_access_key\s*[=:]/i,              // AWS Secret Key assignment
+	/aws_access_key_id\s*[=:]/i,                  // AWS Access Key assignment
+	/FIREBASE_API_KEY|firebase_api_key/i,          // Firebase API Key
+	/GOOGLE_APPLICATION_CREDENTIALS/i,             // Google service account
+	/STRIPE_SECRET_KEY|sk_live_/i,                 // Stripe secret key
+	/SENDGRID_API_KEY/i,                           // SendGrid
+	/TWILIO_AUTH_TOKEN/i,                          // Twilio
+	/DATABASE_URL\s*=\s*postgres/i,                // Database connection strings
+	/PRIVATE_KEY\s*[=:]/i,                         // Generic private key
+	/-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----/, // PEM private key
+	/ghp_[0-9a-zA-Z]{36}/,                        // GitHub personal access token
+	/gho_[0-9a-zA-Z]{36}/,                        // GitHub OAuth token
+	/sk-[a-zA-Z0-9]{20,}/,                        // OpenAI API key
+];
+
+function isSensitiveFileName(name: string): boolean {
+	if (SENSITIVE_FILE_NAMES.has(name)) return true;
+	if (isEnvSensitive(name)) return true;
+	const ext = extname(name).toLowerCase();
+	if (SENSITIVE_CHECK_EXTENSIONS.has(ext)) return true;
+	return false;
+}
+
+function checkFileForSecrets(filePath: string, fileSize: number): boolean {
+	try {
+		if (fileSize > 256 * 1024 || fileSize === 0) return false;
+		const buf = readFileSync(filePath, "utf-8");
+		for (const pattern of SENSITIVE_CONTENT_PATTERNS) {
+			if (pattern.test(buf)) return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 function getDirSizeRecursive(dirPath: string): number {
 	let total = 0;
 	try {
@@ -482,6 +547,33 @@ function detectCleanables(rootPath: string, maxDepth: number = 8): CleanableResu
 
 				// Gestione file speciali (non-directory): .DS_Store, Thumbs.db, Desktop.ini
 				if (!entry.isDirectory()) {
+					// --- Sensitive file detection (.env, keys, credentials) ---
+					if (isSensitiveFileName(entry.name)) {
+						try {
+							const stat = statSync(fullPath, { throwIfNoEntry: false });
+							const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
+							if (fileSize > 0) {
+								// For .env files, always flag. For key/pem files, check content too.
+								const ext = extname(entry.name).toLowerCase();
+								const alwaysSensitive = isEnvSensitive(entry.name) || SENSITIVE_FILE_NAMES.has(entry.name);
+								const contentSensitive = SENSITIVE_CHECK_EXTENSIONS.has(ext) || checkFileForSecrets(fullPath, stat?.size ?? 0);
+								if (alwaysSensitive || contentSensitive) {
+									items.push({
+										path: fullPath,
+										projectPath: dirPath,
+										projectType: "Secrets",
+										folderName: entry.name,
+										size: fileSize,
+										risk: "high" as RiskLevel,
+										category: "secrets" as Category,
+										note: "sensitiveDataFound",
+									});
+								}
+							}
+						} catch {}
+						continue;
+					}
+
 					if (CLEANABLE_NAMES.has(entry.name)) {
 						const rule = CLEANABLE_RULES[entry.name];
 						if (rule) {
@@ -797,6 +889,7 @@ const rpc = BrowserView.defineRPC<{
 			cancelScan: { params: {}; response: { success: boolean } };
 			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
 			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
+			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -1103,6 +1196,22 @@ const rpc = BrowserView.defineRPC<{
 			recordDeletion: async ({ freedBytes, deleteCount }) => {
 				await recordDeletion(freedBytes, deleteCount);
 				return { success: true };
+			},
+			revealInFinder: async ({ filePath }) => {
+				try {
+					const resolved = expandPath(filePath);
+					const stat = statSync(resolved, { throwIfNoEntry: false });
+					if (!stat) return { success: false };
+					// If it's a file, reveal it (selects it in Finder). If directory, open it.
+					if (stat.isDirectory()) {
+						await $`open ${resolved}`.quiet();
+					} else {
+						await $`open -R ${resolved}`.quiet();
+					}
+					return { success: true };
+				} catch {
+					return { success: false };
+				}
 			},
 		},
 		messages: {},

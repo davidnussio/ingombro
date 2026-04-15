@@ -851,6 +851,30 @@ body {
 .clean-filter-chip.chip-all {
 	font-weight: 600;
 }
+.clean-filter-group-secrets {
+	background: rgba(225, 112, 85, 0.08);
+	border: 1px solid rgba(225, 112, 85, 0.25);
+	border-radius: 8px;
+	padding: 2px 6px;
+}
+.clean-filter-group-secrets .clean-filter-group-label {
+	color: #e17055;
+	font-weight: 600;
+}
+.clean-filter-chip.chip-secrets {
+	color: #e17055;
+	border-color: rgba(225, 112, 85, 0.35);
+	font-weight: 600;
+}
+.clean-filter-chip.chip-secrets:hover {
+	background: rgba(225, 112, 85, 0.12);
+	color: #e17055;
+}
+.clean-filter-chip.chip-secrets.active {
+	background: #e17055;
+	border-color: #e17055;
+	color: white;
+}
 .clean-item {
 	display: flex;
 	align-items: center;
@@ -892,6 +916,11 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.clean-item-warning {
+	color: #e17055;
+	font-weight: 600;
+	font-size: 10px;
+}
 .clean-item-size {
 	font-size: 12px;
 	font-weight: 600;
@@ -909,6 +938,34 @@ body {
 	border-radius: 10px;
 	white-space: nowrap;
 	flex-shrink: 0;
+}
+.clean-item-type-secrets {
+	color: #e17055;
+	background: rgba(225, 112, 85, 0.12);
+	border: 1px solid rgba(225, 112, 85, 0.25);
+	font-weight: 600;
+}
+.clean-item .btn-reveal {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	transition: all 0.15s;
+	opacity: 0;
+}
+.clean-item:hover .btn-reveal {
+	opacity: 1;
+}
+.clean-item .btn-reveal:hover {
+	background: rgba(255,255,255,0.08);
+	color: var(--text);
+	border-color: var(--text-muted);
 }
 .btn-danger .icon {
 	margin-right: 4px;

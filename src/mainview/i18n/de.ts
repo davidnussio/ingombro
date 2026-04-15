@@ -74,6 +74,9 @@ const de: Translations = {
 
 	filterAll: "Alle",
 
+	sensitiveDataFound: "Sensible Daten gefunden, die besser verborgen werden sollten",
+	revealInFinder: "Im Finder anzeigen",
+
 	typeCode: "Code",
 	typeImages: "Bilder",
 	typeDocuments: "Dokumente",

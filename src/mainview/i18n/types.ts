@@ -85,6 +85,10 @@ export interface Translations {
 	// Clean filters
 	filterAll: string;
 
+	// Sensitive data
+	sensitiveDataFound: string;
+	revealInFinder: string;
+
 	// Type categories
 	typeCode: string;
 	typeImages: string;

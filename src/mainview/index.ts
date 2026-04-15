@@ -20,7 +20,7 @@ interface CleanableItem {
 	folderName: string;
 	size: number;
 	risk: "low" | "medium" | "high";
-	category: "dev" | "ml" | "office" | "design" | "video" | "music";
+	category: "dev" | "ml" | "office" | "design" | "video" | "music" | "secrets";
 	note?: string;
 }
 
@@ -66,6 +66,7 @@ type AppRPC = {
 			cancelScan: { params: {}; response: { success: boolean } };
 			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
 			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
+			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -775,12 +776,33 @@ function buildCleanFilters() {
 	// One chip per unique folderName, grouped visually by projectType
 	for (const [projectType, folderNames] of tagMap) {
 		const group = document.createElement("span");
-		group.className = "clean-filter-group";
+		group.className = "clean-filter-group" + (projectType === "Secrets" ? " clean-filter-group-secrets" : "");
 
 		const label = document.createElement("span");
 		label.className = "clean-filter-group-label";
 		label.textContent = projectType + ":";
 		group.appendChild(label);
+
+		// For Secrets group, show a single aggregated chip instead of one per file
+		if (projectType === "Secrets") {
+			const allKeys = [...folderNames].map((fn) => `${projectType}|${fn}`);
+			const chip = document.createElement("button");
+			chip.className = "clean-filter-chip chip-secrets";
+			chip.textContent = `⚠ ${t().sensitiveDataFound} (${folderNames.size})`;
+			chip.dataset.filterKey = allKeys.join(",");
+			chip.addEventListener("click", () => {
+				const anyActive = allKeys.some((k) => activeCleanFilters.has(k));
+				for (const k of allKeys) {
+					if (anyActive) activeCleanFilters.delete(k);
+					else activeCleanFilters.add(k);
+				}
+				syncFilterChipStates();
+				renderCleanList();
+			});
+			group.appendChild(chip);
+			container.appendChild(group);
+			continue;
+		}
 
 		for (const folderName of folderNames) {
 			const filterKey = `${projectType}|${folderName}`;
@@ -811,7 +833,13 @@ function syncFilterChipStates() {
 	}
 	container.querySelectorAll<HTMLElement>(".clean-filter-chip:not(.chip-all)").forEach((chip) => {
 		const key = chip.dataset.filterKey || "";
-		chip.classList.toggle("active", activeCleanFilters.has(key));
+		// Aggregated secrets chip: active if any of its keys are active
+		if (key.includes(",")) {
+			const keys = key.split(",");
+			chip.classList.toggle("active", keys.some((k) => activeCleanFilters.has(k)));
+		} else {
+			chip.classList.toggle("active", activeCleanFilters.has(key));
+		}
 	});
 }
 
@@ -841,15 +869,16 @@ function renderCleanList() {
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
 		const isChecked = cleanableSelected.has(item.path);
-		const titleAttr = item.note ? ` title="${escapeAttr(item.note)}"` : "";
+		const titleAttr = item.note ? ` title="${escapeAttr(item.note === "sensitiveDataFound" ? t().sensitiveDataFound : item.note)}"` : "";
 		row.innerHTML = `
 			<input type="checkbox" ${isChecked ? "checked" : ""} data-path="${escapeAttr(item.path)}" />
 			<div class="clean-item-info"${titleAttr}>
 				<div class="clean-item-project">${escapeHtml(item.projectPath)}</div>
-				<div class="clean-item-detail">${escapeHtml(item.folderName)}</div>
+				<div class="clean-item-detail">${escapeHtml(item.folderName)}${item.note === "sensitiveDataFound" ? ` <span class="clean-item-warning">⚠ ${escapeHtml(t().sensitiveDataFound)}</span>` : ""}</div>
 			</div>
-			<div class="clean-item-type">${escapeHtml(item.projectType)}</div>
+			<div class="clean-item-type${item.category === "secrets" ? " clean-item-type-secrets" : ""}">${item.category === "secrets" ? "🔑 " : ""}${escapeHtml(item.projectType)}</div>
 			<div class="clean-item-size">${formatSize(item.size)}</div>
+			<button class="btn-reveal" data-reveal-path="${escapeAttr(item.path)}" title="${escapeAttr(t().revealInFinder)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
 		`;
 		const cb = row.querySelector("input")!;
 		cb.addEventListener("change", () => {
@@ -859,6 +888,12 @@ function renderCleanList() {
 				cleanableSelected.delete(item.path);
 			}
 			updateCleanSelection();
+		});
+		const revealBtn = row.querySelector(".btn-reveal")!;
+		revealBtn.addEventListener("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			electrobun.rpc?.request?.revealInFinder({ filePath: item.path });
 		});
 		list.appendChild(row);
 	}

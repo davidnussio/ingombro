@@ -74,6 +74,9 @@ const ja: Translations = {
 
 	filterAll: "すべて",
 
+	sensitiveDataFound: "隠すべき機密データが見つかりました",
+	revealInFinder: "Finderで表示",
+
 	typeCode: "コード",
 	typeImages: "画像",
 	typeDocuments: "ドキュメント",
