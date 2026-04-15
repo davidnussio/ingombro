@@ -145,6 +145,7 @@ dist
 
 build
 artifacts
+target
 
 # MacOS
 .DS_Store

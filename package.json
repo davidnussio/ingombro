@@ -4,16 +4,19 @@
 	"type": "module",
 	"description": "Disk space analyzer and cleaner",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch",
-		"build:canary": "electrobun build --env=canary",
-		"build:stable": "electrobun build --env=stable"
+		"dev:fe": "vite",
+		"build:fe": "vite build",
+		"dev": "cargo tauri dev",
+		"build": "cargo tauri build",
+		"build:debug": "cargo tauri build --debug"
 	},
 	"dependencies": {
-		"electrobun": "1.16.0"
+		"@tauri-apps/api": "^2"
 	},
 	"devDependencies": {
+		"@tauri-apps/cli": "^2",
 		"@types/bun": "latest",
-		"typescript": "^5.7.2"
+		"typescript": "^5.7.2",
+		"vite": "^6"
 	}
 }

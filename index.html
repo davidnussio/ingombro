@@ -4,7 +4,7 @@
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<title>Ingombro</title>
-	<link rel="stylesheet" href="views://mainview/index.css" />
+	<link rel="stylesheet" href="/src/mainview/index.css" />
 </head>
 <body>
 	<div class="titlebar" id="titlebar">
@@ -16,7 +16,7 @@
 		<div id="screen-welcome" class="screen active">
 			<div class="welcome-main">
 				<div class="welcome-card">
-					<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="Ingombro" />
+					<img class="welcome-icon" src="/src/assets/icon.png" alt="Ingombro" />
 					<h1>Ingombro</h1>
 					<p class="welcome-desc" id="welcomeDesc"></p>
 					<div class="scan-input-group">
@@ -74,56 +74,6 @@
 				<div class="dir-list" id="dirList"></div>
 			</div>
 		</div>
-	</div>
-
-	<!-- Stats widget (fixed top-right) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-header">
-			<span class="stats-widget-title" id="statsWidgetTitle"></span>
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed top-right) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-header">
-			<span class="stats-widget-title" id="statsWidgetTitle"></span>
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-left) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-left">
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-			<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-left) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-left">
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-			<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-center) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-center) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		<div class="stats-widget-chart" id="statsChart"></div>
 	</div>
 
 	<!-- Settings (fixed bottom-right) -->
@@ -219,6 +169,6 @@
 	</div>
 	<div id="infoPanelBackdrop" class="info-panel-backdrop hidden"></div>
 
-	<script type="module" src="views://mainview/index.js"></script>
+	<script type="module" src="/src/mainview/index.ts"></script>
 </body>
 </html>

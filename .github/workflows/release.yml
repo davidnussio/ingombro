@@ -17,72 +17,86 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     strategy:
       matrix:
         include:
-          - os: macos-14
-          # - os: windows-latest
-          # - os: ubuntu-latest
-    runs-on: ${{ matrix.os }}
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            label: macos-arm64
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            label: macos-x64
+          - platform: ubuntu-22.04
+            args: ""
+            label: linux
+          - platform: windows-latest
+            args: ""
+            label: windows
+
+    runs-on: ${{ matrix.platform }}
 
     env:
       IS_PRERELEASE: ${{ github.event.release.prerelease || inputs.prerelease || false }}
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout del codice
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Allinea versione in package.json e electrobun.config.ts
+      - name: Allinea versione
         shell: bash
         run: |
           TAG="${{ inputs.tag || github.event.release.tag_name }}"
           VERSION="${TAG#v}"
-
           sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json && rm -f package.json.bak
-          sed -i.bak "s/version: \".*\"/version: \"$VERSION\"/" electrobun.config.ts && rm -f electrobun.config.ts.bak
-
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json && rm -f src-tauri/tauri.conf.json.bak
           echo "Versione allineata a: $VERSION"
 
-      - name: Setup di Bun
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Installa le dipendenze
+      - name: Install dependencies
         run: bun install
 
-      - name: Build dell'app
-        run: |
-          if [[ "${{ env.IS_PRERELEASE }}" == "true" ]]; then
-            bun run build:canary
-          else
-            bun run build:stable
-          fi
-        shell: bash
-
-      - name: Pubblica su GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.event.release.tag_name }}
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          files: artifacts/*
+      - name: Build with Tauri
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tag || github.event.release.tag_name }}
+          releaseName: "Ingombro ${{ inputs.tag || github.event.release.tag_name }}"
+          releaseBody: ""
+          releaseDraft: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          args: ${{ matrix.args }}
 
   update-homebrew:
-    needs: build-and-release
+    needs: build
     if: ${{ !(github.event.release.prerelease || inputs.prerelease || false) }}
     runs-on: ubuntu-latest
     steps:
       - name: Calcola SHA256 del DMG
+        id: dmg
         run: |
           TAG="${{ inputs.tag || github.event.release.tag_name }}"
           VERSION="${TAG#v}"
-          URL="https://github.com/davidnussio/ingombro/releases/download/${TAG}/stable-macos-arm64-Ingombro.dmg"
+          URL="https://github.com/davidnussio/ingombro/releases/download/${TAG}/Ingombro_${VERSION}_aarch64.dmg"
 
           for i in 1 2 3 4 5; do
             HTTP_CODE=$(curl -sL -o Ingombro.dmg -w "%{http_code}" "$URL")
@@ -104,7 +118,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
-        id: dmg
 
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
@@ -125,13 +138,12 @@ jobs:
             desc "Disk space analyzer and cleaner"
             homepage "https://github.com/davidnussio/ingombro"
 
-            depends_on arch: :arm64
-
             app "Ingombro.app"
 
             zap trash: [
-              "~/Library/Application Support/ingombro.electrobun.dev",
-              "~/Library/Preferences/ingombro.electrobun.dev.plist",
+              "~/Library/Application Support/dev.ingombro.app",
+              "~/Library/Preferences/dev.ingombro.app.plist",
+              "~/.ingombro",
             ]
           end
           EOF

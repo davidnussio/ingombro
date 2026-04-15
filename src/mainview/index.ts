@@ -1,4 +1,5 @@
-import Electrobun, { Electroview } from "electrobun/view";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { initI18n, t, setLanguage, getLanguage, getLocale, getAvailableLanguages } from "./i18n";
 
 // Initialize i18n before anything else
@@ -46,64 +47,19 @@ interface EntryInfo {
 	textPreview?: string;
 }
 
-type AppRPC = {
-	bun: {
-		requests: {
-			scanDirectory: { params: { dirPath: string }; response: { success: boolean; rootPath?: string; error?: string } };
-			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
-			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string; rootPath?: string } };
-			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
-			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
-			listDir: { params: { partial: string }; response: { suggestions: string[] } };
-			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
-			getSettings: { params: {}; response: { maxCacheEntries: number; deleteMode: string; maxDepth: number } };
-			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
-			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
-			getCachedCleanables: { params: { rootPath: string }; response: { found: boolean; cleanables?: CleanableResult } };
-			saveCachedCleanables: { params: { rootPath: string; cleanables: CleanableResult }; response: { success: boolean } };
-			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
-			getEntryInfo: { params: { entryPath: string }; response: EntryInfo };
-			cancelScan: { params: {}; response: { success: boolean } };
-			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
-			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
-		};
-		messages: {};
-	};
-	webview: {
-		requests: {};
-		messages: {
-			scanProgress: { currentDir: string };
-			error: { message: string };
-		};
-	};
-};
-
-const rpc = Electroview.defineRPC<AppRPC>({
-	maxRequestTime: 300000,
-	handlers: {
-		requests: {},
-		messages: {
-			scanProgress: ({ currentDir }) => {
-				const dirEl = document.getElementById("scanCurrentDir");
-				if (dirEl) {
-					const maxLen = 60;
-					if (currentDir.length > maxLen) {
-						dirEl.textContent = "…" + currentDir.slice(-(maxLen - 1));
-					} else {
-						dirEl.textContent = currentDir;
-					}
-				}
-			},
-			error: ({ message }) => {
-				console.error(`[fe] error received: ${message}`);
-				alert(t().errorPrefix + " " + message);
-				showScreen("welcome");
-			},
-		},
-	},
+// --- Listen for scan progress events from Tauri backend ---
+listen<{ currentDir: string }>("scan-progress", (event) => {
+	const dirEl = document.getElementById("scanCurrentDir");
+	if (dirEl) {
+		const currentDir = event.payload.currentDir;
+		const maxLen = 60;
+		if (currentDir.length > maxLen) {
+			dirEl.textContent = "…" + currentDir.slice(-(maxLen - 1));
+		} else {
+			dirEl.textContent = currentDir;
+		}
+	}
 });
-
-const electrobun = new Electrobun.Electroview({ rpc });
 
 // --- State ---
 let currentTree: DirEntry | null = null;
@@ -114,7 +70,7 @@ let totalFreedBytes: number = 0;
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let currentCleanables: CleanableResult | null = null;
 let cleanableSelected: Set<string> = new Set();
-let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
+let activeCleanFilters: Set<string> = new Set();
 let isScanning = false;
 
 // Returns cleanables scoped to the current navigation path
@@ -127,7 +83,6 @@ function getScopedCleanables(): CleanableResult | null {
 	return { items, totalSize: items.reduce((s, i) => s + i.size, 0) };
 }
 
-// Update the clean banner to reflect the current navigation scope
 function updateCleanBanner() {
 	const banner = $("cleanBanner");
 	const scoped = getScopedCleanables();
@@ -141,32 +96,24 @@ function updateCleanBanner() {
 	$("btnOpenClean").classList.remove("hidden");
 }
 
-// --- Cancel scan ---
 async function cancelScan() {
 	if (!isScanning) return;
-	console.log("[fe] cancelScan requested");
 	try {
-		await electrobun.rpc?.request?.cancelScan({});
+		await invoke("cancel_scan");
 	} catch (e) {
 		console.error("[fe] cancelScan error:", e);
 	}
 }
 
-// --- Clean shutdown: cancel any active scan before closing ---
 window.addEventListener("beforeunload", () => {
-	if (isScanning) {
-		cancelScan();
-	}
+	if (isScanning) cancelScan();
 });
 
-// --- Scan helper ---
 async function startScan(dirPath: string) {
 	showScreen("scanning");
 	isScanning = true;
-	console.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
 	try {
-		const result = await electrobun.rpc?.request?.scanDirectory({ dirPath });
-		console.log(`[fe] startScan: response received`, result);
+		const result = await invoke<{ success: boolean; rootPath?: string; error?: string }>("scan_directory", { dirPath });
 		isScanning = false;
 		if (!result || !result.success || !result.rootPath) {
 			if (result?.error === "SCAN_CANCELLED") {
@@ -182,7 +129,7 @@ async function startScan(dirPath: string) {
 		await loadTreeFromCache(result.rootPath, false);
 		detectAndShowCleanables(result.rootPath, false);
 	} catch (e) {
-		console.error(`[fe] startScan error:`, e);
+		console.error("[fe] startScan error:", e);
 		isScanning = false;
 		showScreen("welcome");
 		renderCacheList();
@@ -190,10 +137,8 @@ async function startScan(dirPath: string) {
 }
 
 async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
-	console.log(`[fe] loadTreeFromCache: rootPath="${rootPath}" preserveNav=${preserveNav}`);
-	const res = await electrobun.rpc?.request?.getChildren({ dirPath: rootPath });
+	const res = await invoke<{ children: DirEntry[] }>("get_children", { dirPath: rootPath });
 	if (!res || !res.children || res.children.length === 0) {
-		console.log(`[fe] loadTreeFromCache: no children`);
 		showScreen("welcome");
 		renderCacheList();
 		return;
@@ -212,11 +157,8 @@ async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
 		for (let i = 1; i < oldPaths.length; i++) {
 			const parent = newStack[newStack.length - 1]!;
 			const child = (parent.children || []).find((c) => c.path === oldPaths[i]);
-			if (child) {
-				newStack.push(child);
-			} else {
-				break;
-			}
+			if (child) newStack.push(child);
+			else break;
 		}
 		currentTree = tree;
 		navigationStack = newStack;
@@ -233,7 +175,6 @@ async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
 const $ = (id: string) => document.getElementById(id)!;
 const scanPathInput = $("scanPath") as HTMLInputElement;
 
-// --- Screens ---
 function showScreen(name: "welcome" | "scanning" | "results") {
 	document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
 	$(`screen-${name}`).classList.add("active");
@@ -248,19 +189,15 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 	}
 }
 
-// --- Format size ---
 function formatSize(bytes: number): string {
 	if (bytes === 0) return "0 B";
 	const units = ["B", "KB", "MB", "GB", "TB"];
 	const i = Math.floor(Math.log(bytes) / Math.log(1024));
 	const val = bytes / Math.pow(1024, i);
-	const formatted = new Intl.NumberFormat(getLocale(), {
-		maximumFractionDigits: i > 0 ? 1 : 0,
-	}).format(val);
+	const formatted = new Intl.NumberFormat(getLocale(), { maximumFractionDigits: i > 0 ? 1 : 0 }).format(val);
 	return `${formatted} ${units[i]}`;
 }
 
-// --- Color palette for treemap ---
 const COLORS = [
 	"#6c5ce7", "#00b894", "#e17055", "#0984e3", "#fdcb6e",
 	"#e84393", "#00cec9", "#d63031", "#74b9ff", "#55efc4",
@@ -281,10 +218,8 @@ interface TreemapRect {
 function squarify(entries: DirEntry[], x: number, y: number, w: number, h: number): TreemapRect[] {
 	const rects: TreemapRect[] = [];
 	if (entries.length === 0 || w <= 0 || h <= 0) return rects;
-
 	const totalSize = entries.reduce((s, e) => s + e.size, 0);
 	if (totalSize === 0) return rects;
-
 	const sorted = [...entries].sort((a, b) => b.size - a.size);
 	layoutStrip(sorted, x, y, w, h, totalSize, rects);
 	return rects;
@@ -299,7 +234,6 @@ function layoutStrip(
 		rects.push({ x, y, w, h, entry: entries[0]!, color: getColor(rects.length) });
 		return;
 	}
-
 	const horizontal = w >= h;
 	let stripSize = 0;
 	let stripEntries: DirEntry[] = [];
@@ -309,11 +243,9 @@ function layoutStrip(
 		const entry = entries[i]!;
 		const testSize = stripSize + entry.size;
 		const testEntries = [...stripEntries, entry];
-
 		const stripFraction = testSize / totalSize;
 		const stripDim = horizontal ? w * stripFraction : h * stripFraction;
 		const otherDim = horizontal ? h : w;
-
 		let worstAspect = 0;
 		for (const e of testEntries) {
 			const eFraction = e.size / testSize;
@@ -321,19 +253,15 @@ function layoutStrip(
 			const aspect = Math.max(stripDim / eDim, eDim / stripDim);
 			worstAspect = Math.max(worstAspect, aspect);
 		}
-
 		if (worstAspect <= bestAspect) {
 			bestAspect = worstAspect;
 			stripSize = testSize;
 			stripEntries = testEntries;
-		} else {
-			break;
-		}
+		} else break;
 	}
 
 	const stripFraction = stripSize / totalSize;
 	let cx = x, cy = y;
-
 	if (horizontal) {
 		const stripW = w * stripFraction;
 		for (const e of stripEntries) {
@@ -371,31 +299,26 @@ function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], a
 	for (const r of rects) {
 		ctx.fillStyle = r.color;
 		ctx.globalAlpha = 0.85 * alpha;
-
 		const w = canvasW || 9999;
 		const h = canvasH || 9999;
 		const touchTop = r.y <= pad + edgeTolerance;
 		const touchLeft = r.x <= pad + edgeTolerance;
 		const touchBottom = (r.y + r.h) >= h - pad - edgeTolerance;
 		const touchRight = (r.x + r.w) >= w - pad - edgeTolerance;
-
 		const radii: [number, number, number, number] = [
 			(touchTop && touchLeft) ? innerR : defaultR,
 			(touchTop && touchRight) ? innerR : defaultR,
 			(touchBottom && touchRight) ? innerR : defaultR,
 			(touchBottom && touchLeft) ? innerR : defaultR,
 		];
-
 		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, radii);
 		ctx.fill();
 		ctx.globalAlpha = alpha;
-
 		if (r.w > 50 && r.h > 28) {
 			ctx.fillStyle = `rgba(255,255,255,${0.9 * alpha})`;
 			ctx.font = "600 11px -apple-system, system-ui, sans-serif";
 			const label = truncateText(ctx, r.entry.name, r.w - 12);
 			ctx.fillText(label, r.x + 6, r.y + 16);
-
 			if (r.h > 40) {
 				ctx.fillStyle = `rgba(255,255,255,${0.55 * alpha})`;
 				ctx.font = "10px -apple-system, system-ui, sans-serif";
@@ -411,53 +334,42 @@ function renderTreemap(entries: DirEntry[]) {
 	const container = document.getElementById("vizContainer")!;
 	const rect = container.getBoundingClientRect();
 	const dpr = window.devicePixelRatio || 1;
-
 	const prevRects = [...treemapRects];
 	const shouldAnimate = !skipNextAnimation && prevRects.length > 0;
 	skipNextAnimation = false;
-
 	let prevOffscreen: OffscreenCanvas | null = null;
 	if (shouldAnimate && canvas.width > 0 && canvas.height > 0) {
 		prevOffscreen = new OffscreenCanvas(canvas.width, canvas.height);
 		const offCtx = prevOffscreen.getContext("2d")!;
 		offCtx.drawImage(canvas, 0, 0);
 	}
-
 	canvas.width = rect.width * dpr;
 	canvas.height = rect.height * dpr;
 	canvas.style.width = rect.width + "px";
 	canvas.style.height = rect.height + "px";
-
 	const ctx = canvas.getContext("2d")!;
-
 	const topEntries = entries.filter((e) => e.size > 0).slice(0, 40);
 	treemapRects = squarify(topEntries, 2, 2, rect.width - 4, rect.height - 4);
-
 	if (!shouldAnimate) {
 		ctx.scale(dpr, dpr);
 		ctx.clearRect(0, 0, rect.width, rect.height);
 		drawTreemapFrame(ctx, treemapRects, 1, rect.width, rect.height);
 		return;
 	}
-
 	if (treemapAnimId) cancelAnimationFrame(treemapAnimId);
 	const duration = 250;
 	const start = performance.now();
-
 	function animateFrame(now: number) {
 		const elapsed = now - start;
 		const t = Math.min(elapsed / duration, 1);
 		const ease = 1 - Math.pow(1 - t, 3);
-
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
-
 		if (prevOffscreen) {
 			ctx.globalAlpha = 1 - ease;
 			ctx.drawImage(prevOffscreen, 0, 0, prevOffscreen.width, prevOffscreen.height, 0, 0, canvas.width, canvas.height);
 			ctx.globalAlpha = 1;
 		}
-
 		ctx.save();
 		ctx.scale(dpr, dpr);
 		const scale = 0.97 + 0.03 * ease;
@@ -468,7 +380,6 @@ function renderTreemap(entries: DirEntry[]) {
 		ctx.translate(-cx, -cy);
 		drawTreemapFrame(ctx, treemapRects, ease, rect.width, rect.height);
 		ctx.restore();
-
 		if (t < 1) {
 			treemapAnimId = requestAnimationFrame(animateFrame);
 		} else {
@@ -479,7 +390,6 @@ function renderTreemap(entries: DirEntry[]) {
 			drawTreemapFrame(ctx, treemapRects, 1, rect.width, rect.height);
 		}
 	}
-
 	treemapAnimId = requestAnimationFrame(animateFrame);
 }
 
@@ -529,10 +439,7 @@ treemapCanvas.addEventListener("mousemove", (e) => {
 		tooltip.classList.add("hidden");
 	}
 });
-
-treemapCanvas.addEventListener("mouseleave", () => {
-	tooltip.classList.add("hidden");
-});
+treemapCanvas.addEventListener("mouseleave", () => tooltip.classList.add("hidden"));
 
 treemapCanvas.addEventListener("click", async (e) => {
 	const rect = treemapCanvas.getBoundingClientRect();
@@ -542,16 +449,12 @@ treemapCanvas.addEventListener("click", async (e) => {
 	if (hit && hit.entry.isDir) {
 		if (!hit.entry.children || hit.entry.children.length === 0) {
 			try {
-				const res = await electrobun.rpc?.request?.getChildren({ dirPath: hit.entry.path });
+				const res = await invoke<{ children: DirEntry[] }>("get_children", { dirPath: hit.entry.path });
 				if (res && res.children && res.children.length > 0) {
 					hit.entry.children = res.children;
 					hit.entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
-				} else {
-					return;
-				}
-			} catch {
-				return;
-			}
+				} else return;
+			} catch { return; }
 		}
 		navigationStack.push(hit.entry);
 		renderResults(hit.entry);
@@ -587,7 +490,6 @@ function renderBreadcrumb() {
 function renderResults(entry: DirEntry) {
 	$("totalSize").textContent = formatSize(entry.size);
 	renderBreadcrumb();
-
 	const children = (entry.children || []).filter((c) => c.size > 0);
 	renderTreemap(children);
 	renderDirList(children, entry.size);
@@ -597,7 +499,6 @@ function renderResults(entry: DirEntry) {
 function renderDirList(entries: DirEntry[], parentSize: number) {
 	const list = $("dirList");
 	list.innerHTML = "";
-
 	for (const entry of entries) {
 		const pct = parentSize > 0 ? (entry.size / parentSize) * 100 : 0;
 		const colorIdx = entries.indexOf(entry);
@@ -622,33 +523,25 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 				<button class="btn-delete" data-path="${escapeAttr(entry.path)}" data-name="${escapeAttr(entry.name)}" data-size="${entry.size}">${trashIcon}</button>
 			</div>
 		`;
-
 		if (entry.isDir) {
 			item.addEventListener("click", async (e) => {
 				if ((e.target as HTMLElement).classList.contains("btn-delete")) return;
 				if (!entry.children || entry.children.length === 0) {
 					try {
-						const res = await electrobun.rpc?.request?.getChildren({ dirPath: entry.path });
+						const res = await invoke<{ children: DirEntry[] }>("get_children", { dirPath: entry.path });
 						if (res && res.children && res.children.length > 0) {
 							entry.children = res.children;
 							entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
-						} else {
-							return;
-						}
-					} catch {
-						return;
-					}
+						} else return;
+					} catch { return; }
 				}
 				navigationStack.push(entry);
 				renderResults(entry);
 			});
 			item.style.cursor = "pointer";
 		}
-
 		list.appendChild(item);
 	}
-
-	// Delete buttons
 	list.querySelectorAll(".btn-delete").forEach((btn) => {
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
@@ -664,8 +557,6 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			$("modal-delete").classList.remove("hidden");
 		});
 	});
-
-	// Info buttons
 	list.querySelectorAll(".btn-info").forEach((btn) => {
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
@@ -679,7 +570,6 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 function escapeHtml(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-
 function escapeAttr(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
@@ -691,38 +581,31 @@ async function detectAndShowCleanables(rootPath: string, useCache: boolean = tru
 	banner.classList.add("clean-banner-scanning");
 	$("cleanBannerMsg").textContent = t().cleanAnalyzing;
 	$("btnOpenClean").classList.add("hidden");
-
 	try {
-		// Try cached cleanables first (only when opening from cache, not after a new scan)
 		if (useCache) {
-			const cached = await electrobun.rpc?.request?.getCachedCleanables({ rootPath });
+			const cached = await invoke<{ found: boolean; cleanables?: CleanableResult }>("get_cached_cleanables", { rootPath });
 			if (cached?.found && cached.cleanables && cached.cleanables.items.length > 0) {
 				currentCleanables = cached.cleanables;
 				cleanableSelected = new Set(cached.cleanables.items.map((i) => i.path));
 				banner.classList.remove("clean-banner-scanning");
-				const count = cached.cleanables.items.length;
-				$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(cached.cleanables.totalSize), count);
+				$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(cached.cleanables.totalSize), cached.cleanables.items.length);
 				$("btnOpenClean").classList.remove("hidden");
 				return;
 			}
 		}
-
-		const result = await electrobun.rpc?.request?.detectCleanables({ rootPath });
+		const result = await invoke<CleanableResult>("detect_cleanables_cmd", { rootPath });
 		if (!result || result.items.length === 0) {
 			banner.classList.add("hidden");
 			currentCleanables = null;
-			// Save empty result to cache so we don't re-scan next time
-			await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: { items: [], totalSize: 0 } });
+			await invoke("save_cached_cleanables", { rootPath, cleanables: { items: [], totalSize: 0 } });
 			return;
 		}
 		currentCleanables = result;
 		cleanableSelected = new Set(result.items.map((i) => i.path));
 		banner.classList.remove("clean-banner-scanning");
-		const count = result.items.length;
-		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), count);
+		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), result.items.length);
 		$("btnOpenClean").classList.remove("hidden");
-		// Save to cache for next time
-		await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: result });
+		await invoke("save_cached_cleanables", { rootPath, cleanables: result });
 	} catch (e) {
 		console.error("[cleanables] detection error:", e);
 		banner.classList.add("hidden");
@@ -733,19 +616,14 @@ async function detectAndShowCleanables(rootPath: string, useCache: boolean = tru
 function openCleanModal() {
 	const scoped = getScopedCleanables();
 	if (!scoped || scoped.items.length === 0) return;
-	const modal = $("modal-clean");
-
 	$("cleanTotalBadge").textContent = formatSize(scoped.totalSize);
-	// Pre-select only low/medium risk items; high risk unchecked by default
 	cleanableSelected = new Set(scoped.items.filter((i) => i.risk !== "high").map((i) => i.path));
-	activeCleanFilters = new Set(); // reset filters
-
+	activeCleanFilters = new Set();
 	buildCleanFilters();
 	renderCleanList();
-
 	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
 	updateCleanSelection();
-	modal.classList.remove("hidden");
+	$("modal-clean").classList.remove("hidden");
 }
 
 function buildCleanFilters() {
@@ -753,47 +631,32 @@ function buildCleanFilters() {
 	container.innerHTML = "";
 	const scoped = getScopedCleanables();
 	if (!scoped) return;
-
-	// Collect unique tags: group by projectType → set of folderNames
 	const tagMap = new Map<string, Set<string>>();
 	for (const item of scoped.items) {
 		if (!tagMap.has(item.projectType)) tagMap.set(item.projectType, new Set());
 		tagMap.get(item.projectType)!.add(item.folderName);
 	}
-
-	// "All" chip
 	const allChip = document.createElement("button");
 	allChip.className = "clean-filter-chip chip-all active";
 	allChip.textContent = t().filterAll;
-	allChip.addEventListener("click", () => {
-		activeCleanFilters.clear();
-		syncFilterChipStates();
-		renderCleanList();
-	});
+	allChip.addEventListener("click", () => { activeCleanFilters.clear(); syncFilterChipStates(); renderCleanList(); });
 	container.appendChild(allChip);
-
-	// One chip per unique folderName, grouped visually by projectType
 	for (const [projectType, folderNames] of tagMap) {
 		const group = document.createElement("span");
 		group.className = "clean-filter-group";
-
 		const label = document.createElement("span");
 		label.className = "clean-filter-group-label";
 		label.textContent = projectType + ":";
 		group.appendChild(label);
-
 		for (const folderName of folderNames) {
 			const filterKey = `${projectType}|${folderName}`;
 			const chip = document.createElement("button");
 			chip.className = "clean-filter-chip";
-			chip.textContent = `${folderName}`;
+			chip.textContent = folderName;
 			chip.dataset.filterKey = filterKey;
 			chip.addEventListener("click", () => {
-				if (activeCleanFilters.has(filterKey)) {
-					activeCleanFilters.delete(filterKey);
-				} else {
-					activeCleanFilters.add(filterKey);
-				}
+				if (activeCleanFilters.has(filterKey)) activeCleanFilters.delete(filterKey);
+				else activeCleanFilters.add(filterKey);
 				syncFilterChipStates();
 				renderCleanList();
 			});
@@ -806,12 +669,9 @@ function buildCleanFilters() {
 function syncFilterChipStates() {
 	const container = $("cleanFilters");
 	const allChip = container.querySelector(".chip-all") as HTMLElement;
-	if (allChip) {
-		allChip.classList.toggle("active", activeCleanFilters.size === 0);
-	}
+	if (allChip) allChip.classList.toggle("active", activeCleanFilters.size === 0);
 	container.querySelectorAll<HTMLElement>(".clean-filter-chip:not(.chip-all)").forEach((chip) => {
-		const key = chip.dataset.filterKey || "";
-		chip.classList.toggle("active", activeCleanFilters.has(key));
+		chip.classList.toggle("active", activeCleanFilters.has(chip.dataset.filterKey || ""));
 	});
 }
 
@@ -826,17 +686,12 @@ function renderCleanList() {
 	const list = $("cleanList");
 	list.innerHTML = "";
 	const items = getFilteredCleanItems();
-
-	// Deseleziona gli elementi non visibili
 	if (getScopedCleanables() && activeCleanFilters.size > 0) {
 		const visiblePaths = new Set(items.map((i) => i.path));
 		for (const path of [...cleanableSelected]) {
-			if (!visiblePaths.has(path)) {
-				cleanableSelected.delete(path);
-			}
+			if (!visiblePaths.has(path)) cleanableSelected.delete(path);
 		}
 	}
-
 	for (const item of items) {
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
@@ -853,11 +708,8 @@ function renderCleanList() {
 		`;
 		const cb = row.querySelector("input")!;
 		cb.addEventListener("change", () => {
-			if (cb.checked) {
-				cleanableSelected.add(item.path);
-			} else {
-				cleanableSelected.delete(item.path);
-			}
+			if (cb.checked) cleanableSelected.add(item.path);
+			else cleanableSelected.delete(item.path);
 			updateCleanSelection();
 		});
 		list.appendChild(row);
@@ -872,12 +724,10 @@ function updateCleanSelection() {
 	const selectedItems = visibleItems.filter((i) => cleanableSelected.has(i.path));
 	const totalSelected = selectedItems.reduce((s, i) => s + i.size, 0);
 	const count = selectedItems.length;
-
 	$("cleanSelectedInfo").textContent = `${t().cleanSelected(count)} · ${formatSize(totalSelected)}`;
 	const btn = $("btnConfirmClean") as HTMLButtonElement;
 	btn.disabled = count === 0;
 	$("btnConfirmCleanText").textContent = count > 0 ? t().cleanSelectedWithSize(formatSize(totalSelected)) : t().cleanSelectedWithSize("");
-
 	const selectAll = document.getElementById("cleanSelectAll") as HTMLInputElement;
 	const visibleSelected = visibleItems.filter((i) => cleanableSelected.has(i.path)).length;
 	selectAll.checked = visibleItems.length > 0 && visibleSelected === visibleItems.length;
@@ -889,27 +739,19 @@ $("cleanSelectAll").addEventListener("change", () => {
 	if (!getScopedCleanables()) return;
 	const visibleItems = getFilteredCleanItems();
 	const visiblePaths = new Set(visibleItems.map((i) => i.path));
-	const checkboxes = $("cleanList").querySelectorAll<HTMLInputElement>("input[type='checkbox']");
-	checkboxes.forEach((cb) => {
+	$("cleanList").querySelectorAll<HTMLInputElement>("input[type='checkbox']").forEach((cb) => {
 		cb.checked = checked;
 		const path = cb.dataset.path;
 		if (path && visiblePaths.has(path)) {
-			if (checked) cleanableSelected.add(path);
-			else cleanableSelected.delete(path);
+			if (checked) cleanableSelected.add(path); else cleanableSelected.delete(path);
 		}
 	});
 	updateCleanSelection();
 });
 
 $("btnOpenClean").addEventListener("click", () => openCleanModal());
-
-$("btnCancelClean").addEventListener("click", () => {
-	$("modal-clean").classList.add("hidden");
-});
-
-$("modal-clean").querySelector(".modal-backdrop")!.addEventListener("click", () => {
-	$("modal-clean").classList.add("hidden");
-});
+$("btnCancelClean").addEventListener("click", () => $("modal-clean").classList.add("hidden"));
+$("modal-clean").querySelector(".modal-backdrop")!.addEventListener("click", () => $("modal-clean").classList.add("hidden"));
 
 $("btnConfirmClean").addEventListener("click", async () => {
 	if (cleanableSelected.size === 0) return;
@@ -917,20 +759,16 @@ $("btnConfirmClean").addEventListener("click", async () => {
 	const btn = $("btnConfirmClean") as HTMLButtonElement;
 	btn.disabled = true;
 	$("btnConfirmCleanText").textContent = t().cleaningInProgress;
-
 	try {
-		const result = await electrobun.rpc?.request?.batchDelete({ paths });
+		const result = await invoke<{ success: boolean; deletedCount: number; deletedSize: number; errors: string[] }>("batch_delete", { paths });
 		$("modal-clean").classList.add("hidden");
-
 		if (result) {
 			if (result.deletedSize > 0) {
 				totalFreedBytes += result.deletedSize;
 				showFreedToast(result.deletedSize);
-				electrobun.rpc?.request?.recordDeletion({ freedBytes: result.deletedSize, deleteCount: result.deletedCount });
+				invoke("record_deletion", { freedBytes: result.deletedSize, deleteCount: result.deletedCount });
 			}
-			if (result.errors.length > 0) {
-				console.error("[cleanables] batch delete errors:", result.errors);
-			}
+			if (result.errors.length > 0) console.error("[cleanables] batch delete errors:", result.errors);
 			if (currentTree) {
 				await loadTreeFromCache(currentTree.path, true);
 				detectAndShowCleanables(currentTree.path, false);
@@ -953,7 +791,6 @@ $("btnBack").addEventListener("click", () => {
 	}
 });
 
-// --- Scan ---
 $("btnScan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
 	if (!dirPath) return;
@@ -966,26 +803,18 @@ $("btnRescan").addEventListener("click", () => {
 	startScan(dirPath);
 });
 
-$("btnCancelScan").addEventListener("click", () => {
-	cancelScan();
-});
+$("btnCancelScan").addEventListener("click", () => cancelScan());
 
 // --- Render cache list ---
 async function renderCacheList() {
-	const result = await electrobun.rpc?.request?.getCacheList({});
+	const result = await invoke<{ entries: { rootPath: string; timestamp: number }[] }>("get_cache_list");
 	const container = $("cacheList");
 	container.innerHTML = "";
-	if (!result || result.entries.length === 0) {
-		container.classList.add("hidden");
-		return;
-	}
+	if (!result || result.entries.length === 0) { container.classList.add("hidden"); return; }
 	container.classList.remove("hidden");
 	for (const entry of result.entries) {
 		const date = new Date(entry.timestamp);
-		const dateStr = date.toLocaleDateString(getLocale(), {
-			day: "numeric", month: "short",
-			hour: "2-digit", minute: "2-digit",
-		});
+		const dateStr = date.toLocaleDateString(getLocale(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 		const card = document.createElement("div");
 		card.className = "cache-card";
 		card.innerHTML = `
@@ -1020,24 +849,15 @@ async function renderCacheList() {
 		btn.addEventListener("click", async (e) => {
 			e.stopPropagation();
 			const path = (e.currentTarget as HTMLElement).dataset.path!;
-			await electrobun.rpc?.request?.deleteCacheEntry({ rootPath: path });
+			await invoke("delete_cache_entry", { rootPath: path });
 			renderCacheList();
 		});
 	});
 }
 
 // --- Delete modal ---
-$("btnCancelDelete").addEventListener("click", () => {
-	$("modal-delete").classList.add("hidden");
-	pendingDeletePath = null;
-	pendingDeleteSize = 0;
-});
-
-$("modal-delete").querySelector(".modal-backdrop")!.addEventListener("click", () => {
-	$("modal-delete").classList.add("hidden");
-	pendingDeletePath = null;
-	pendingDeleteSize = 0;
-});
+$("btnCancelDelete").addEventListener("click", () => { $("modal-delete").classList.add("hidden"); pendingDeletePath = null; pendingDeleteSize = 0; });
+$("modal-delete").querySelector(".modal-backdrop")!.addEventListener("click", () => { $("modal-delete").classList.add("hidden"); pendingDeletePath = null; pendingDeleteSize = 0; });
 
 $("btnConfirmDelete").addEventListener("click", async () => {
 	if (!pendingDeletePath) return;
@@ -1046,40 +866,30 @@ $("btnConfirmDelete").addEventListener("click", async () => {
 	const deletedSize = pendingDeleteSize;
 	pendingDeletePath = null;
 	pendingDeleteSize = 0;
-
-	const result = await electrobun.rpc?.request?.deleteEntry({ entryPath: path });
+	const result = await invoke<{ success: boolean; error?: string; rootPath?: string }>("delete_entry", { entryPath: path });
 	if (result && !result.success) {
 		alert(t().deleteError + " " + (result.error || t().unknownError));
 	} else {
 		totalFreedBytes += deletedSize;
 		showFreedToast(deletedSize);
-		electrobun.rpc?.request?.recordDeletion({ freedBytes: deletedSize, deleteCount: 1 });
-		if (result?.rootPath) {
-			await loadTreeFromCache(result.rootPath, true);
-		}
+		invoke("record_deletion", { freedBytes: deletedSize, deleteCount: 1 });
+		if (result?.rootPath) await loadTreeFromCache(result.rootPath, true);
 	}
 });
 
 // --- Freed space toast ---
 function showFreedToast(justFreed: number) {
 	const toast = $("freedToast");
-	const justEl = $("freedJust");
-	const totalEl = $("freedTotal");
-	const totalRow = $("freedTotalRow");
-
-	justEl.textContent = formatSize(justFreed);
+	$("freedJust").textContent = formatSize(justFreed);
 	if (totalFreedBytes > justFreed) {
-		totalEl.textContent = formatSize(totalFreedBytes);
-		totalRow.classList.remove("hidden");
+		$("freedTotal").textContent = formatSize(totalFreedBytes);
+		$("freedTotalRow").classList.remove("hidden");
 	} else {
-		totalRow.classList.add("hidden");
+		$("freedTotalRow").classList.add("hidden");
 	}
-
-	toast.classList.remove("hidden");
-	toast.classList.remove("toast-exit");
+	toast.classList.remove("hidden", "toast-exit");
 	void toast.offsetWidth;
 	toast.classList.add("toast-enter");
-
 	if (toastTimeout) clearTimeout(toastTimeout);
 	toastTimeout = setTimeout(() => {
 		toast.classList.remove("toast-enter");
@@ -1096,11 +906,8 @@ window.addEventListener("resize", () => {
 		skipNextAnimation = true;
 		renderTreemap(children);
 	}
-	// Re-render stats chart on resize if on welcome screen
 	const activeScreen = document.querySelector(".screen.active");
-	if (activeScreen?.id === "screen-welcome" && !$("statsWidget").classList.contains("hidden")) {
-		renderStatsWidget();
-	}
+	if (activeScreen?.id === "screen-welcome" && !$("statsWidget").classList.contains("hidden")) renderStatsWidget();
 });
 
 // --- Autocomplete ---
@@ -1112,36 +919,17 @@ let acDebounce: ReturnType<typeof setTimeout> | null = null;
 let validateDebounce: ReturnType<typeof setTimeout> | null = null;
 
 async function validatePath(dirPath: string) {
-	if (!dirPath.trim()) {
-		btnScan.disabled = true;
-		scanPathLabel.textContent = t().scanLabel;
-		scanPathLabel.style.color = "";
-		return;
-	}
-	const result = await electrobun.rpc?.request?.validatePath({ dirPath: dirPath.trim() });
-	if (result?.valid) {
-		btnScan.disabled = false;
-		scanPathLabel.textContent = t().scanLabel;
-		scanPathLabel.style.color = "";
-	} else {
-		btnScan.disabled = true;
-		scanPathLabel.textContent = t().dirNotFound;
-		scanPathLabel.style.color = "var(--danger)";
-	}
+	if (!dirPath.trim()) { btnScan.disabled = true; scanPathLabel.textContent = t().scanLabel; scanPathLabel.style.color = ""; return; }
+	const result = await invoke<{ valid: boolean }>("validate_path", { dirPath: dirPath.trim() });
+	if (result?.valid) { btnScan.disabled = false; scanPathLabel.textContent = t().scanLabel; scanPathLabel.style.color = ""; }
+	else { btnScan.disabled = true; scanPathLabel.textContent = t().dirNotFound; scanPathLabel.style.color = "var(--danger)"; }
 }
 
 async function fetchSuggestions(partial: string) {
-	if (!partial || partial.length < 1) {
-		acList.classList.add("hidden");
-		return;
-	}
+	if (!partial || partial.length < 1) { acList.classList.add("hidden"); return; }
 	try {
-		const result = await electrobun.rpc?.request?.listDir({ partial });
-		console.log("[autocomplete] partial:", partial, "result:", result);
-		if (!result || !result.suggestions || result.suggestions.length === 0) {
-			acList.classList.add("hidden");
-			return;
-		}
+		const result = await invoke<{ suggestions: string[] }>("list_dir", { partial });
+		if (!result || !result.suggestions || result.suggestions.length === 0) { acList.classList.add("hidden"); return; }
 		acIndex = -1;
 		acList.innerHTML = "";
 		for (const s of result.suggestions) {
@@ -1158,71 +946,45 @@ async function fetchSuggestions(partial: string) {
 			acList.appendChild(item);
 		}
 		acList.classList.remove("hidden");
-	} catch (err) {
-		console.error("[autocomplete] error:", err);
-		acList.classList.add("hidden");
-	}
+	} catch { acList.classList.add("hidden"); }
 }
 
 const inputHint = $("inputHint");
-
 scanPathInput.addEventListener("input", () => {
 	inputHint.style.display = scanPathInput.value ? "none" : "";
 	if (acDebounce) clearTimeout(acDebounce);
 	if (validateDebounce) clearTimeout(validateDebounce);
-	acDebounce = setTimeout(() => {
-		fetchSuggestions(scanPathInput.value);
-	}, 120);
-	validateDebounce = setTimeout(() => {
-		validatePath(scanPathInput.value);
-	}, 250);
+	acDebounce = setTimeout(() => fetchSuggestions(scanPathInput.value), 120);
+	validateDebounce = setTimeout(() => validatePath(scanPathInput.value), 250);
 });
 
 scanPathInput.addEventListener("keydown", (e) => {
 	const items = acList.querySelectorAll(".autocomplete-item");
 	const isOpen = !acList.classList.contains("hidden") && items.length > 0;
-
 	if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-		e.preventDefault();
-		acList.classList.add("hidden");
+		e.preventDefault(); acList.classList.add("hidden");
 		const dirPath = scanPathInput.value.trim();
-		if (dirPath) {
-			startScan(dirPath);
-		}
+		if (dirPath) startScan(dirPath);
 		return;
 	}
-
 	if (e.key === "Enter") {
 		if (isOpen && acIndex >= 0) {
 			e.preventDefault();
-			const selected = items[acIndex] as HTMLElement;
-			const val = selected.textContent || "";
+			const val = (items[acIndex] as HTMLElement).textContent || "";
 			scanPathInput.value = val + "/";
 			acList.classList.add("hidden");
 			fetchSuggestions(val + "/");
 			validatePath(val + "/");
-		} else {
-			acList.classList.add("hidden");
-		}
+		} else acList.classList.add("hidden");
 		return;
 	}
-
 	if (!isOpen) return;
-
-	if (e.key === "ArrowDown") {
+	if (e.key === "ArrowDown") { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); updateAcActive(items); }
+	else if (e.key === "ArrowUp") { e.preventDefault(); acIndex = Math.max(acIndex - 1, 0); updateAcActive(items); }
+	else if (e.key === "Escape") acList.classList.add("hidden");
+	else if (e.key === "Tab" && acIndex >= 0) {
 		e.preventDefault();
-		acIndex = Math.min(acIndex + 1, items.length - 1);
-		updateAcActive(items);
-	} else if (e.key === "ArrowUp") {
-		e.preventDefault();
-		acIndex = Math.max(acIndex - 1, 0);
-		updateAcActive(items);
-	} else if (e.key === "Escape") {
-		acList.classList.add("hidden");
-	} else if (e.key === "Tab" && acIndex >= 0) {
-		e.preventDefault();
-		const selected = items[acIndex] as HTMLElement;
-		const val = selected.textContent || "";
+		const val = (items[acIndex] as HTMLElement).textContent || "";
 		scanPathInput.value = val + "/";
 		acList.classList.add("hidden");
 		fetchSuggestions(val + "/");
@@ -1231,19 +993,10 @@ scanPathInput.addEventListener("keydown", (e) => {
 });
 
 function updateAcActive(items: NodeListOf<Element>) {
-	items.forEach((el, i) => {
-		el.classList.toggle("active", i === acIndex);
-		if (i === acIndex) el.scrollIntoView({ block: "nearest" });
-	});
+	items.forEach((el, i) => { el.classList.toggle("active", i === acIndex); if (i === acIndex) el.scrollIntoView({ block: "nearest" }); });
 }
-
-scanPathInput.addEventListener("blur", () => {
-	setTimeout(() => acList.classList.add("hidden"), 150);
-});
-
-scanPathInput.addEventListener("focus", () => {
-	if (scanPathInput.value) fetchSuggestions(scanPathInput.value);
-});
+scanPathInput.addEventListener("blur", () => setTimeout(() => acList.classList.add("hidden"), 150));
+scanPathInput.addEventListener("focus", () => { if (scanPathInput.value) fetchSuggestions(scanPathInput.value); });
 
 // --- Settings ---
 const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
@@ -1253,7 +1006,7 @@ const settingLang = $("settingLang") as HTMLSelectElement;
 let settingsSaveDebounce: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSettingsUI() {
-	const settings = await electrobun.rpc?.request?.getSettings({});
+	const settings = await invoke<{ maxCacheEntries: number; deleteMode: string; maxDepth: number }>("get_settings");
 	if (settings) {
 		settingMaxCache.value = String(settings.maxCacheEntries);
 		settingMaxDepth.value = String(settings.maxDepth);
@@ -1264,7 +1017,7 @@ async function loadSettingsUI() {
 function saveSettingsDebounced() {
 	if (settingsSaveDebounce) clearTimeout(settingsSaveDebounce);
 	settingsSaveDebounce = setTimeout(async () => {
-		await electrobun.rpc?.request?.saveSettings({
+		await invoke("save_settings", {
 			maxCacheEntries: Number(settingMaxCache.value) || 10,
 			deleteMode: settingDeleteMode.value,
 			maxDepth: Number(settingMaxDepth.value) || 10,
@@ -1278,7 +1031,6 @@ settingMaxDepth.addEventListener("change", saveSettingsDebounced);
 settingMaxDepth.addEventListener("input", saveSettingsDebounced);
 settingDeleteMode.addEventListener("change", saveSettingsDebounced);
 
-// --- Language selector ---
 function populateLanguageSelector() {
 	settingLang.innerHTML = "";
 	for (const lang of getAvailableLanguages()) {
@@ -1289,37 +1041,20 @@ function populateLanguageSelector() {
 	}
 	settingLang.value = getLanguage();
 }
+settingLang.addEventListener("change", () => { setLanguage(settingLang.value); applyTranslations(); renderCacheList(); });
 
-settingLang.addEventListener("change", () => {
-	setLanguage(settingLang.value);
-	applyTranslations();
-	// Re-render dynamic content
-	renderCacheList();
-});
-
-// --- Apply all translations to static DOM elements ---
 function applyTranslations() {
 	const tr = t();
-
-	// HTML lang attribute
 	document.documentElement.lang = getLanguage();
-
-	// Welcome screen
 	$("welcomeDesc").textContent = tr.welcomeDesc;
 	$("scanPathLabel").textContent = tr.scanLabel;
 	btnScan.textContent = tr.scanButton;
-
-	// Scanning screen
 	$("scanningText").textContent = tr.scanningText;
 	$("btnCancelScan").textContent = tr.cancelScan;
-
-	// Results screen
 	$("btnBack").title = tr.backTitle;
 	$("breadcrumb").setAttribute("aria-label", tr.navigation);
 	$("btnRescan").textContent = tr.rescanButton;
 	$("btnOpenClean").textContent = tr.cleanDetails;
-
-	// Settings
 	$("settingsHeaderText").textContent = tr.settingsTitle;
 	$("settingLangLabel").textContent = tr.language;
 	$("settingMaxCacheLabel").textContent = tr.maxCache;
@@ -1327,24 +1062,16 @@ function applyTranslations() {
 	$("settingDeleteModeLabel").textContent = tr.deleteMode;
 	$("optionTrash").textContent = tr.deleteModeTrash;
 	$("optionPermanent").textContent = tr.deleteModePermanent;
-
-	// Delete modal
 	$("deleteModalTitle").textContent = tr.deleteConfirmTitle;
 	$("btnCancelDelete").textContent = tr.cancel;
 	$("btnConfirmDelete").textContent = tr.deleteButton;
-
-	// Clean modal
 	$("cleanModalTitle").textContent = tr.smartCleanTitle;
 	$("cleanModalDesc").textContent = tr.cleanModalDesc;
 	$("cleanSelectAllLabel").textContent = tr.selectAll;
 	$("btnCancelClean").textContent = tr.cancel;
 	$("btnConfirmCleanText").textContent = tr.cleanSelectedWithSize("");
-
-	// Toast
 	$("freedJustLabel").textContent = tr.freedJust;
 	$("freedTotalLabel").textContent = tr.freedSessionTotal;
-
-	// Info panel
 	$("infoPanelClose").title = tr.closeEsc;
 	$("infoPanelLoading").textContent = tr.loading;
 }
@@ -1357,28 +1084,19 @@ function openInfoPanel(entryPath: string) {
 	const backdrop = $("infoPanelBackdrop");
 	const body = $("infoPanelBody");
 	const title = $("infoPanelTitle");
-
 	title.textContent = t().loading;
 	body.innerHTML = `<div class="info-panel-loading">${t().loading}</div>`;
-
 	panel.classList.remove("hidden");
 	backdrop.classList.remove("hidden");
 	void panel.offsetWidth;
 	panel.classList.add("visible");
 	backdrop.classList.add("visible");
 	infoPanelOpen = true;
-
-	electrobun.rpc?.request?.getEntryInfo({ entryPath }).then((info: any) => {
-		if (!info || info.error) {
-			body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`;
-			title.textContent = t().errorTitle;
-			return;
-		}
+	invoke<EntryInfo>("get_entry_info", { entryPath }).then((info) => {
+		if (!info) { body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`; title.textContent = t().errorTitle; return; }
 		title.textContent = info.name;
-		renderInfoPanelContent(info as EntryInfo);
-	}).catch(() => {
-		body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`;
-	});
+		renderInfoPanelContent(info);
+	}).catch(() => { body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`; });
 }
 
 function closeInfoPanel() {
@@ -1387,98 +1105,45 @@ function closeInfoPanel() {
 	panel.classList.remove("visible");
 	backdrop.classList.remove("visible");
 	infoPanelOpen = false;
-	setTimeout(() => {
-		panel.classList.add("hidden");
-		backdrop.classList.add("hidden");
-	}, 260);
+	setTimeout(() => { panel.classList.add("hidden"); backdrop.classList.add("hidden"); }, 260);
 }
 
 function formatDate(ms: number): string {
-	const d = new Date(ms);
-	return d.toLocaleDateString(getLocale(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+	return new Date(ms).toLocaleDateString(getLocale(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function renderInfoPanelContent(info: EntryInfo) {
 	const body = $("infoPanelBody");
 	const tr = t();
 	let html = "";
-
 	if (info.isDir) {
-		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">${tr.details}</div>`;
+		html += `<div class="info-section"><div class="info-section-title">${tr.details}</div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.files}</span><span class="info-row-value">${info.fileCount ?? 0}</span></div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.folders}</span><span class="info-row-value">${info.dirCount ?? 0}</span></div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
-		html += `</div>`;
-
-		if (info.largestFile) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.largestFile}</div>`;
-			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.largestFile.name)}</span><span class="info-row-value">${formatSize(info.largestFile.size)}</span></div>`;
-			html += `</div>`;
-		}
-
-		if (info.newestFile) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.newestModified}</div>`;
-			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.newestFile.name)}</span><span class="info-row-value">${formatDate(info.newestFile.modifiedAt)}</span></div>`;
-			html += `</div>`;
-		}
-
+		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div></div>`;
+		if (info.largestFile) html += `<div class="info-section"><div class="info-section-title">${tr.largestFile}</div><div class="info-row"><span class="info-row-label">${escapeHtml(info.largestFile.name)}</span><span class="info-row-value">${formatSize(info.largestFile.size)}</span></div></div>`;
+		if (info.newestFile) html += `<div class="info-section"><div class="info-section-title">${tr.newestModified}</div><div class="info-row"><span class="info-row-label">${escapeHtml(info.newestFile.name)}</span><span class="info-row-value">${formatDate(info.newestFile.modifiedAt)}</span></div></div>`;
 		if (info.typeDistribution && info.typeDistribution.length > 0) {
-			const typeLabelMap: Record<string, string> = {
-				code: tr.typeCode, images: tr.typeImages, documents: tr.typeDocuments,
-				config: tr.typeConfig, styles: tr.typeStyles, html: tr.typeHTML, other: tr.typeOther,
-			};
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.typeDistribution}</div>`;
-			html += `<div class="info-type-bar">`;
-			for (const td of info.typeDistribution) {
-				html += `<div class="info-type-bar-seg" style="width:${td.percentage}%;background:${td.color}"></div>`;
-			}
-			html += `</div>`;
-			html += `<div class="info-type-legend">`;
-			for (const td of info.typeDistribution) {
-				const label = typeLabelMap[td.label] || td.label;
-				html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${td.color}"></span>${escapeHtml(label)} ${td.percentage}%</span>`;
-			}
-			html += `</div>`;
-			html += `</div>`;
+			const typeLabelMap: Record<string, string> = { code: tr.typeCode, images: tr.typeImages, documents: tr.typeDocuments, config: tr.typeConfig, styles: tr.typeStyles, html: tr.typeHTML, other: tr.typeOther };
+			html += `<div class="info-section"><div class="info-section-title">${tr.typeDistribution}</div><div class="info-type-bar">`;
+			for (const td of info.typeDistribution) html += `<div class="info-type-bar-seg" style="width:${td.percentage}%;background:${td.color}"></div>`;
+			html += `</div><div class="info-type-legend">`;
+			for (const td of info.typeDistribution) html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${td.color}"></span>${escapeHtml(typeLabelMap[td.label] || td.label)} ${td.percentage}%</span>`;
+			html += `</div></div>`;
 		}
 	} else {
-		if (info.extension) {
-			html += `<div style="margin-bottom:14px"><span class="info-ext-badge">${escapeHtml(info.extension)}</span></div>`;
-		}
-
-		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">${tr.details}</div>`;
+		if (info.extension) html += `<div style="margin-bottom:14px"><span class="info-ext-badge">${escapeHtml(info.extension)}</span></div>`;
+		html += `<div class="info-section"><div class="info-section-title">${tr.details}</div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
 		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
-		html += `</div>`;
-
-		if (info.previewType === "text" && info.textPreview) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.preview}</div>`;
-			html += `<pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre>`;
-			html += `</div>`;
-		} else if (info.previewType === "image") {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.preview}</div>`;
-			html += `<img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" />`;
-			html += `</div>`;
-		} else {
-			html += `<div class="info-file-icon">📄</div>`;
-		}
+		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div></div>`;
+		if (info.previewType === "text" && info.textPreview) html += `<div class="info-section"><div class="info-section-title">${tr.preview}</div><pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre></div>`;
+		else if (info.previewType === "image") html += `<div class="info-section"><div class="info-section-title">${tr.preview}</div><img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" /></div>`;
+		else html += `<div class="info-file-icon">📄</div>`;
 	}
-
-	html += `<div class="info-section" style="margin-top:8px">`;
-	html += `<div class="info-section-title">${tr.path}</div>`;
-	html += `<div style="font-size:11px;color:var(--text-muted);word-break:break-all;line-height:1.5">${escapeHtml(info.path)}</div>`;
-	html += `</div>`;
-
+	html += `<div class="info-section" style="margin-top:8px"><div class="info-section-title">${tr.path}</div><div style="font-size:11px;color:var(--text-muted);word-break:break-all;line-height:1.5">${escapeHtml(info.path)}</div></div>`;
 	body.innerHTML = html;
 }
 
@@ -1486,158 +1151,86 @@ $("infoPanelClose").addEventListener("click", closeInfoPanel);
 $("infoPanelBackdrop").addEventListener("click", closeInfoPanel);
 
 document.addEventListener("keydown", (e) => {
-	if (e.key === "Escape" && infoPanelOpen) {
-		e.preventDefault();
-		closeInfoPanel();
-		return;
-	}
-
-	// T005 — Global keyboard shortcuts
+	if (e.key === "Escape" && infoPanelOpen) { e.preventDefault(); closeInfoPanel(); return; }
 	const activeScreen = document.querySelector(".screen.active");
 	const isResults = activeScreen?.id === "screen-results";
 	const isModalOpen = !$("modal-delete").classList.contains("hidden") || !$("modal-clean").classList.contains("hidden");
 	const isInputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLSelectElement;
-
 	if (isModalOpen || isInputFocused) return;
-
 	if (e.key === "Backspace" && isResults) {
 		e.preventDefault();
-		if (navigationStack.length > 1) {
-			navigationStack.pop();
-			renderResults(navigationStack[navigationStack.length - 1]!);
-		} else {
-			showScreen("welcome");
-			renderCacheList();
-		}
+		if (navigationStack.length > 1) { navigationStack.pop(); renderResults(navigationStack[navigationStack.length - 1]!); }
+		else { showScreen("welcome"); renderCacheList(); }
 		return;
 	}
-
-	if (e.key === "Escape" && isResults) {
-		e.preventDefault();
-		showScreen("welcome");
-		renderCacheList();
-		return;
-	}
+	if (e.key === "Escape" && isResults) { e.preventDefault(); showScreen("welcome"); renderCacheList(); }
 });
 
-// --- Stats Widget (Canvas 2D sparkline bar chart) ---
+// --- Stats Widget ---
 let statsAnimId2: number | null = null;
 
 async function renderStatsWidget() {
 	const widget = $("statsWidget");
 	const tr = t();
-
 	let stats: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } | null = null;
-	try {
-		stats = await electrobun.rpc?.request?.getStats({ days: 14 }) ?? null;
-	} catch { /* ignore */ }
-
-	if (!stats || stats.totalFreed === 0) {
-		widget.classList.add("hidden");
-		if (statsAnimId2) { cancelAnimationFrame(statsAnimId2); statsAnimId2 = null; }
-		return;
-	}
-
+	try { stats = await invoke("get_stats", { days: 14 }) ?? null; } catch {}
+	if (!stats || stats.totalFreed === 0) { widget.classList.add("hidden"); if (statsAnimId2) { cancelAnimationFrame(statsAnimId2); statsAnimId2 = null; } return; }
 	widget.classList.remove("hidden");
 	$("statsWidgetTitle").textContent = tr.statsTitle;
 	$("statsWidgetTotal").textContent = formatSize(stats.totalFreed);
-
-	// Build 14-day array (fill gaps with 0)
 	const days: { date: string; freedBytes: number }[] = [];
 	const now = new Date();
-	for (let i = 13; i >= 0; i--) {
-		const d = new Date(now);
-		d.setDate(d.getDate() - i);
-		const dateStr = d.toISOString().slice(0, 10);
-		const entry = stats.entries.find((e) => e.date === dateStr);
-		days.push({ date: dateStr, freedBytes: entry?.freedBytes ?? 0 });
-	}
-
+	for (let i = 13; i >= 0; i--) { const d = new Date(now); d.setDate(d.getDate() - i); const dateStr = d.toISOString().slice(0, 10); const entry = stats.entries.find((e) => e.date === dateStr); days.push({ date: dateStr, freedBytes: entry?.freedBytes ?? 0 }); }
 	const maxBytes = Math.max(...days.map((d) => d.freedBytes), 1);
-
-	// Setup canvas
 	const container = $("statsChart");
 	let canvas = container.querySelector("canvas") as HTMLCanvasElement | null;
-	if (!canvas) {
-		canvas = document.createElement("canvas");
-		container.appendChild(canvas);
-	}
-
+	if (!canvas) { canvas = document.createElement("canvas"); container.appendChild(canvas); }
 	const rect = container.getBoundingClientRect();
 	const dpr = window.devicePixelRatio || 1;
-	const w = rect.width;
-	const h = rect.height;
+	const w = rect.width, h = rect.height;
 	if (w === 0 || h === 0) return;
-
-	canvas.width = w * dpr;
-	canvas.height = h * dpr;
-	canvas.style.width = w + "px";
-	canvas.style.height = h + "px";
-
+	canvas.width = w * dpr; canvas.height = h * dpr;
+	canvas.style.width = w + "px"; canvas.style.height = h + "px";
 	const ctx = canvas.getContext("2d")!;
 	const barGap = 3;
 	const barWidth = (w - barGap * (days.length - 1)) / days.length;
-
-	// Animate entrance
 	if (statsAnimId2) cancelAnimationFrame(statsAnimId2);
 	const animStart = performance.now();
 	const animDuration = 500;
-
 	function drawFrame(now: number) {
 		const elapsed = now - animStart;
 		const globalProgress = Math.min(elapsed / animDuration, 1);
-
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
 		ctx.clearRect(0, 0, canvas!.width, canvas!.height);
 		ctx.scale(dpr, dpr);
-
 		for (let i = 0; i < days.length; i++) {
 			const d = days[i]!;
 			const normalizedH = d.freedBytes > 0 ? (d.freedBytes / maxBytes) * h : 0;
-
 			const delay = i * 20;
 			const barProgress = Math.max(0, Math.min((elapsed - delay) / (animDuration * 0.7), 1));
 			const ease = 1 - Math.pow(1 - barProgress, 3);
 			const barH = Math.max(normalizedH > 0 ? 2 : 0, normalizedH * ease);
-
 			const x = i * (barWidth + barGap);
 			const y = h - barH;
-
 			if (d.freedBytes > 0) {
 				const intensity = d.freedBytes / maxBytes;
 				const r = Math.round(108 + (85 - 108) * intensity);
 				const g = Math.round(92 + (239 - 92) * intensity);
 				const b = Math.round(231 + (196 - 231) * intensity);
 				ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
-			} else {
-				ctx.fillStyle = "rgba(255,255,255,0.06)";
-			}
-
+			} else ctx.fillStyle = "rgba(255,255,255,0.06)";
 			const radius = Math.min(2, barWidth / 2, barH / 2);
 			ctx.beginPath();
-			ctx.moveTo(x + radius, y);
-			ctx.lineTo(x + barWidth - radius, y);
+			ctx.moveTo(x + radius, y); ctx.lineTo(x + barWidth - radius, y);
 			ctx.quadraticCurveTo(x + barWidth, y, x + barWidth, y + radius);
-			ctx.lineTo(x + barWidth, y + barH);
-			ctx.lineTo(x, y + barH);
-			ctx.lineTo(x, y + radius);
-			ctx.quadraticCurveTo(x, y, x + radius, y);
-			ctx.closePath();
-			ctx.fill();
-
-			if (d.freedBytes === 0) {
-				ctx.fillStyle = "rgba(255,255,255,0.06)";
-				ctx.fillRect(x, h - 2, barWidth, 2);
-			}
+			ctx.lineTo(x + barWidth, y + barH); ctx.lineTo(x, y + barH);
+			ctx.lineTo(x, y + radius); ctx.quadraticCurveTo(x, y, x + radius, y);
+			ctx.closePath(); ctx.fill();
+			if (d.freedBytes === 0) { ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fillRect(x, h - 2, barWidth, 2); }
 		}
-
-		if (globalProgress < 1) {
-			statsAnimId2 = requestAnimationFrame(drawFrame);
-		} else {
-			statsAnimId2 = null;
-		}
+		if (globalProgress < 1) statsAnimId2 = requestAnimationFrame(drawFrame);
+		else statsAnimId2 = null;
 	}
-
 	statsAnimId2 = requestAnimationFrame(drawFrame);
 }
 

@@ -1,19 +1,17 @@
 {
 	"compilerOptions": {
-		"target": "ESNext",
-		"useDefineForClassFields": true,
+		"target": "ES2021",
 		"module": "ESNext",
-		"resolveJsonModule": true,
-		"allowJs": true,
-		"isolatedModules": true,
-		"moduleDetection": "force",
-		"noEmit": true,
+		"moduleResolution": "bundler",
 		"strict": true,
-		"noUnusedLocals": false,
-		"noUnusedParameters": false,
-		"noFallthroughCasesInSwitch": true,
-		"moduleResolution": "bundler"
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		"lib": ["ES2021", "DOM", "DOM.Iterable"]
 	},
-	"include": ["src"],
-	"exclude": ["node_modules", "dist", "build", "../../package/dist"]
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "src-tauri"]
 }

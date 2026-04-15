@@ -1,0 +1,41 @@
+{
+  "productName": "Ingombro",
+  "version": "1.0.0",
+  "identifier": "dev.ingombro.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "bun run dev:fe",
+    "beforeBuildCommand": "bun run build:fe"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Ingombro",
+        "width": 1100,
+        "height": 750,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "transparent": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: file:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}
