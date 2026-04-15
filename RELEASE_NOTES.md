@@ -1,8 +1,27 @@
-# Ingombro v1.1.0 — Secrets Detection & Envsec Integration 🔐
+# Ingombro v1.2.0 — Auto-Updates & Version Display 🚀
 
 ---
 
 ## ✨ What's New
+
+### Auto-updates
+- Built-in update mechanism using Electrobun's Updater API
+- Automatic check for updates 5 seconds after launch
+- "Check for Updates…" menu item under the Ingombro menu
+- Non-intrusive banner when an update is available: download, then restart & install
+- Patch-based delta updates (as small as 14KB) with full-bundle fallback
+
+### Version display
+- App version now shown in the bottom-left corner of the UI
+- Version is read at runtime from the bundled `version.json`
+
+### Release workflow
+- Version in `package.json` and `electrobun.config.ts` is now automatically committed back to `main` after a release build, keeping the repo in sync with published versions
+
+---
+
+<details>
+<summary>v1.1.0 — Secrets Detection & Envsec Integration 🔐</summary>
 
 ### Secrets detection
 Smart Clean now detects sensitive files left in your projects:
@@ -22,7 +41,7 @@ Smart Clean now detects sensitive files left in your projects:
 - Action buttons now consistently spaced even when envsec button is absent
 - Reordered action buttons: reveal in Finder first, envsec import second
 
----
+</details>
 
 <details>
 <summary>v1.0.0 🎉</summary>
