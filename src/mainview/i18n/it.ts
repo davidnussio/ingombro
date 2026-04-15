@@ -96,6 +96,13 @@ const it: Translations = {
 	statsTitle: "Spazio liberato",
 	statsTotal: "Totale",
 	statsNoData: "Nessuna pulizia registrata",
+
+	updateAvailableText: (version) => `Versione ${version} disponibile`,
+	updateReadyText: (version) => `Versione ${version} pronta per l'installazione`,
+	updateDownload: "Scarica",
+	updateDownloading: "Download in corso…",
+	updateInstall: "Riavvia e aggiorna",
+	updateUpToDate: "Sei aggiornato",
 };
 
 export default it;

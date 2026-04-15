@@ -96,6 +96,13 @@ const en: Translations = {
 	statsTitle: "Space freed",
 	statsTotal: "Total",
 	statsNoData: "No cleanup recorded yet",
+
+	updateAvailableText: (version) => `Version ${version} is available`,
+	updateReadyText: (version) => `Version ${version} is ready to install`,
+	updateDownload: "Download",
+	updateDownloading: "Downloading…",
+	updateInstall: "Restart & Update",
+	updateUpToDate: "You're up to date",
 };
 
 export default en;

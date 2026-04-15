@@ -96,6 +96,13 @@ const de: Translations = {
 	statsTitle: "Freigegebener Speicher",
 	statsTotal: "Gesamt",
 	statsNoData: "Keine Bereinigung aufgezeichnet",
+
+	updateAvailableText: (version) => `Version ${version} verfügbar`,
+	updateReadyText: (version) => `Version ${version} bereit zur Installation`,
+	updateDownload: "Herunterladen",
+	updateDownloading: "Wird heruntergeladen…",
+	updateInstall: "Neustart & Update",
+	updateUpToDate: "Alles aktuell",
 };
 
 export default de;

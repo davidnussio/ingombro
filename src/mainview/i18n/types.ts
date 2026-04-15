@@ -110,4 +110,12 @@ export interface Translations {
 	statsTitle: string;
 	statsTotal: string;
 	statsNoData: string;
+
+	// Updates
+	updateAvailableText?: (version: string) => string;
+	updateReadyText?: (version: string) => string;
+	updateDownload?: string;
+	updateDownloading?: string;
+	updateInstall?: string;
+	updateUpToDate?: string;
 }

@@ -69,6 +69,10 @@ type AppRPC = {
 			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
 			checkEnvsecAvailable: { params: {}; response: { available: boolean } };
 			importEnvToEnvsec: { params: { filePath: string; context: string }; response: { success: boolean; imported: number; error?: string } };
+			checkForUpdate: { params: {}; response: { version: string; updateAvailable: boolean; updateReady: boolean; error?: string } };
+			downloadUpdate: { params: {}; response: { success: boolean; error?: string } };
+			applyUpdate: { params: {}; response: { success: boolean; error?: string } };
+			getAppVersion: { params: {}; response: { version: string; channel: string } };
 		};
 		messages: {};
 	};
@@ -77,6 +81,9 @@ type AppRPC = {
 		messages: {
 			scanProgress: { currentDir: string };
 			error: { message: string };
+			updateAvailable: { version: string };
+			updateReady: { version: string };
+			updateError: { message: string };
 		};
 	};
 };
@@ -102,6 +109,18 @@ const rpc = Electroview.defineRPC<AppRPC>({
 				alert(t().errorPrefix + " " + message);
 				showScreen("welcome");
 			},
+			updateAvailable: ({ version }) => {
+				console.log(`[fe] Update available: ${version}`);
+				showUpdateBanner(version);
+			},
+			updateReady: ({ version }) => {
+				console.log(`[fe] Update ready: ${version}`);
+				showUpdateReadyBanner(version);
+			},
+			updateError: ({ message }) => {
+				console.error(`[fe] Update error: ${message}`);
+				hideUpdateBanner();
+			},
 		},
 	},
 });
@@ -120,6 +139,53 @@ let cleanableSelected: Set<string> = new Set();
 let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
 let isScanning = false;
 let envsecAvailable: boolean | null = null; // null = not checked yet
+
+// --- Update banner ---
+function showUpdateBanner(version: string) {
+	let banner = document.getElementById("updateBanner");
+	if (!banner) {
+		banner = document.createElement("div");
+		banner.id = "updateBanner";
+		banner.style.cssText = "position:fixed;top:38px;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:#1a3a2a;color:#4ade80;font-size:13px;border-bottom:1px solid #2d5a3d;-webkit-app-region:no-drag;";
+		document.body.prepend(banner);
+	}
+	banner.innerHTML = `
+		<span>🚀 ${t().updateAvailableText?.(version) ?? `Version ${version} is available`}</span>
+		<button id="updateDownloadBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateDownload ?? "Download"}</button>
+		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
+	`;
+	document.getElementById("updateDownloadBtn")!.onclick = async () => {
+		const btn = document.getElementById("updateDownloadBtn") as HTMLButtonElement;
+		btn.textContent = t().updateDownloading ?? "Downloading…";
+		btn.disabled = true;
+		btn.style.opacity = "0.6";
+		await rpc.request.downloadUpdate({});
+	};
+	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
+}
+
+function showUpdateReadyBanner(version: string) {
+	let banner = document.getElementById("updateBanner");
+	if (!banner) {
+		banner = document.createElement("div");
+		banner.id = "updateBanner";
+		banner.style.cssText = "position:fixed;top:38px;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:#1a3a2a;color:#4ade80;font-size:13px;border-bottom:1px solid #2d5a3d;-webkit-app-region:no-drag;";
+		document.body.prepend(banner);
+	}
+	banner.innerHTML = `
+		<span>✅ ${t().updateReadyText?.(version) ?? `Version ${version} is ready to install`}</span>
+		<button id="updateApplyBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateInstall ?? "Restart & Update"}</button>
+		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
+	`;
+	document.getElementById("updateApplyBtn")!.onclick = async () => {
+		await rpc.request.applyUpdate({});
+	};
+	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
+}
+
+function hideUpdateBanner() {
+	document.getElementById("updateBanner")?.remove();
+}
 
 // Returns cleanables scoped to the current navigation path
 function getScopedCleanables(): CleanableResult | null {

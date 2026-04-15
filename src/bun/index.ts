@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow, Screen, ApplicationMenu } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Screen, ApplicationMenu, Updater } from "electrobun/bun";
 import { statSync, readdirSync, rmSync, mkdirSync, readFileSync } from "fs";
 import { join, basename, resolve, extname } from "path";
 import { homedir } from "os";
@@ -892,6 +892,10 @@ const rpc = BrowserView.defineRPC<{
 			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
 			checkEnvsecAvailable: { params: {}; response: { available: boolean } };
 			importEnvToEnvsec: { params: { filePath: string; context: string }; response: { success: boolean; imported: number; error?: string } };
+			checkForUpdate: { params: {}; response: { version: string; updateAvailable: boolean; updateReady: boolean; error?: string } };
+			downloadUpdate: { params: {}; response: { success: boolean; error?: string } };
+			applyUpdate: { params: {}; response: { success: boolean; error?: string } };
+			getAppVersion: { params: {}; response: { version: string; channel: string } };
 		};
 		messages: {};
 	};
@@ -900,6 +904,9 @@ const rpc = BrowserView.defineRPC<{
 		messages: {
 			scanProgress: { currentDir: string };
 			error: { message: string };
+			updateAvailable: { version: string };
+			updateReady: { version: string };
+			updateError: { message: string };
 		};
 	};
 }>({
@@ -1274,6 +1281,58 @@ const rpc = BrowserView.defineRPC<{
 					return { success: false, imported: 0, error: e.message };
 				}
 			},
+			checkForUpdate: async () => {
+				try {
+					const updateInfo = await Updater.checkForUpdate();
+					console.log(`[updater] Check result: version=${updateInfo.version} available=${updateInfo.updateAvailable} ready=${updateInfo.updateReady}`);
+					if (updateInfo.updateAvailable) {
+						rpc.send.updateAvailable({ version: updateInfo.version });
+					}
+					return {
+						version: updateInfo.version,
+						updateAvailable: updateInfo.updateAvailable,
+						updateReady: updateInfo.updateReady,
+					};
+				} catch (e: any) {
+					console.error("[updater] Check error:", e);
+					return { version: "", updateAvailable: false, updateReady: false, error: e.message };
+				}
+			},
+			downloadUpdate: async () => {
+				try {
+					console.log("[updater] Starting download...");
+					await Updater.downloadUpdate();
+					const info = Updater.updateInfo();
+					console.log(`[updater] Download complete, ready=${info?.updateReady}`);
+					if (info?.updateReady) {
+						rpc.send.updateReady({ version: info.version });
+					}
+					return { success: true };
+				} catch (e: any) {
+					console.error("[updater] Download error:", e);
+					rpc.send.updateError({ message: e.message });
+					return { success: false, error: e.message };
+				}
+			},
+			applyUpdate: async () => {
+				try {
+					console.log("[updater] Applying update...");
+					await Updater.applyUpdate();
+					return { success: true };
+				} catch (e: any) {
+					console.error("[updater] Apply error:", e);
+					return { success: false, error: e.message };
+				}
+			},
+			getAppVersion: async () => {
+				try {
+					const local = await Updater.getLocallocalInfo();
+					return { version: local.version, channel: local.channel };
+				} catch (e: any) {
+					console.error("[updater] getLocalInfo error:", e);
+					return { version: "unknown", channel: "unknown" };
+				}
+			},
 		},
 		messages: {},
 	},
@@ -1300,6 +1359,11 @@ ApplicationMenu.setApplicationMenu([
 		submenu: [
 			{ role: "about" },
 			{ type: "separator" },
+			{
+				label: "Check for Updates…",
+				action: "check-for-updates",
+			},
+			{ type: "separator" },
 			{ role: "hide", accelerator: "CmdOrCtrl+H" },
 			{ role: "hideOthers", accelerator: "CmdOrCtrl+Shift+H" },
 			{ role: "showAll" },
@@ -1320,6 +1384,37 @@ ApplicationMenu.setApplicationMenu([
 		],
 	},
 ]);
+
+// --- Handle "Check for Updates" menu action ---
+ApplicationMenu.on("application-menu-clicked", async (event: any) => {
+	if (event?.action === "check-for-updates") {
+		try {
+			console.log("[updater] Manual check from menu...");
+			const updateInfo = await Updater.checkForUpdate();
+			if (updateInfo.updateAvailable) {
+				rpc.send.updateAvailable({ version: updateInfo.version });
+			}
+		} catch (e) {
+			console.error("[updater] Menu check error:", e);
+		}
+	}
+});
+
+// --- Auto-check for updates on startup (after a short delay) ---
+setTimeout(async () => {
+	try {
+		console.log("[updater] Auto-checking for updates...");
+		const updateInfo = await Updater.checkForUpdate();
+		if (updateInfo.updateAvailable) {
+			console.log(`[updater] Update available: ${updateInfo.version}`);
+			rpc.send.updateAvailable({ version: updateInfo.version });
+		} else {
+			console.log("[updater] App is up to date");
+		}
+	} catch (e) {
+		console.error("[updater] Auto-check failed:", e);
+	}
+}, 5000);
 
 // --- Clean shutdown: cancel active scans on quit ---
 process.on("SIGTERM", () => {

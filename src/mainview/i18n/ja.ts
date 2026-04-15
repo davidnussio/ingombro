@@ -96,6 +96,13 @@ const ja: Translations = {
 	statsTitle: "解放済みスペース",
 	statsTotal: "合計",
 	statsNoData: "クリーンアップの記録なし",
+
+	updateAvailableText: (version) => `バージョン ${version} が利用可能です`,
+	updateReadyText: (version) => `バージョン ${version} のインストール準備完了`,
+	updateDownload: "ダウンロード",
+	updateDownloading: "ダウンロード中…",
+	updateInstall: "再起動して更新",
+	updateUpToDate: "最新です",
 };
 
 export default ja;
