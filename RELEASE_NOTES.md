@@ -1,10 +1,19 @@
-# Ingombro v1.2.0 — Auto-Updates & Version Display 🚀
+# Ingombro v1.3.0 — Collapsible Settings Panel 🎛️
 
 ---
 
 ## ✨ What's New
 
-### Auto-updates
+### Collapsible settings panel
+- Settings now live behind a sleek vertical tab on the right edge of the window (gear icon + "Settings" label)
+- Click the tab to open the settings panel as a slide-in overlay with a semi-transparent dark backdrop
+- Click the backdrop or press `Esc` to close
+- Works at all window sizes — cleaner UI with more room for the main content
+
+---
+
+<details>
+<summary>v1.2.0 — Auto-Updates & Version Display 🚀</summary>
 - Built-in update mechanism using Electrobun's Updater API
 - Automatic check for updates 5 seconds after launch
 - "Check for Updates…" menu item under the Ingombro menu
@@ -18,7 +27,7 @@
 ### Release workflow
 - Version in `package.json` and `electrobun.config.ts` is now automatically committed back to `main` after a release build, keeping the repo in sync with published versions
 
----
+</details>
 
 <details>
 <summary>v1.1.0 — Secrets Detection & Envsec Integration 🔐</summary>
