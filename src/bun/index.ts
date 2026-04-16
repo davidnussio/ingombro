@@ -869,6 +869,8 @@ async function getEntryInfoFromFS(entryPath: string): Promise<EntryInfo | null> 
 const display = Screen.getPrimaryDisplay();
 const workArea = display.workArea;
 
+let mainWin: InstanceType<typeof BrowserWindow> | null = null;
+
 const rpc = BrowserView.defineRPC<{
 	bun: {
 		requests: {
@@ -896,6 +898,8 @@ const rpc = BrowserView.defineRPC<{
 			downloadUpdate: { params: {}; response: { success: boolean; error?: string } };
 			applyUpdate: { params: {}; response: { success: boolean; error?: string } };
 			getAppVersion: { params: {}; response: { version: string; channel: string } };
+			getWindowPosition: { params: {}; response: { x: number; y: number } };
+			moveWindow: { params: { x: number; y: number }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -1333,12 +1337,20 @@ const rpc = BrowserView.defineRPC<{
 					return { version: "unknown", channel: "unknown" };
 				}
 			},
+			getWindowPosition: async () => {
+				const pos = mainWin!.getPosition();
+				return { x: pos.x, y: pos.y };
+			},
+			moveWindow: async ({ x, y }) => {
+				mainWin!.setPosition(x, y);
+				return { success: true };
+			},
 		},
 		messages: {},
 	},
 });
 
-const mainWin = new BrowserWindow({
+mainWin = new BrowserWindow({
 	title: "Ingombro",
 	url: "views://mainview/index.html",
 	frame: {
@@ -1350,6 +1362,16 @@ const mainWin = new BrowserWindow({
 	titleBarStyle: "hiddenInset",
 	transparent: false,
 	rpc,
+});
+
+// --- Enforce minimum window size ---
+const MIN_WIDTH = 640;
+const MIN_HEIGHT = 480;
+mainWin.on("resize", (event: any) => {
+	const { width, height } = event.data;
+	if (width < MIN_WIDTH || height < MIN_HEIGHT) {
+		mainWin.setSize(Math.max(width, MIN_WIDTH), Math.max(height, MIN_HEIGHT));
+	}
 });
 
 // --- Application Menu (enables Cmd+C, Cmd+V, etc.) ---

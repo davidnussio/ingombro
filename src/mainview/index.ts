@@ -73,6 +73,8 @@ type AppRPC = {
 			downloadUpdate: { params: {}; response: { success: boolean; error?: string } };
 			applyUpdate: { params: {}; response: { success: boolean; error?: string } };
 			getAppVersion: { params: {}; response: { version: string; channel: string } };
+			getWindowPosition: { params: {}; response: { x: number; y: number } };
+			moveWindow: { params: { x: number; y: number }; response: { success: boolean } };
 		};
 		messages: {};
 	};
@@ -126,6 +128,45 @@ const rpc = Electroview.defineRPC<AppRPC>({
 });
 
 const electrobun = new Electrobun.Electroview({ rpc });
+
+// --- Titlebar drag (manual implementation for WebKit) ---
+{
+	const titlebar = document.getElementById("titlebar")!;
+	let isDragging = false;
+	let dragStartX = 0;
+	let dragStartY = 0;
+	let winStartX = 0;
+	let winStartY = 0;
+
+	titlebar.addEventListener("mousedown", async (e: MouseEvent) => {
+		// Ignore clicks on interactive children (buttons, inputs, etc.)
+		if ((e.target as HTMLElement).closest("button, input, select, a, [data-no-drag]")) return;
+		if (e.button !== 0) return;
+
+		isDragging = true;
+		dragStartX = e.screenX;
+		dragStartY = e.screenY;
+		try {
+			const pos = await electrobun.rpc?.request?.getWindowPosition({});
+			if (pos) {
+				winStartX = pos.x;
+				winStartY = pos.y;
+			}
+		} catch {}
+		e.preventDefault();
+	});
+
+	window.addEventListener("mousemove", (e: MouseEvent) => {
+		if (!isDragging) return;
+		const dx = e.screenX - dragStartX;
+		const dy = e.screenY - dragStartY;
+		electrobun.rpc?.request?.moveWindow({ x: winStartX + dx, y: winStartY + dy });
+	});
+
+	window.addEventListener("mouseup", () => {
+		isDragging = false;
+	});
+}
 
 // --- State ---
 let currentTree: DirEntry | null = null;
