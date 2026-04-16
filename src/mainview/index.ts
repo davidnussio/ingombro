@@ -351,11 +351,16 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 	const settings = $("settingsSection");
 	if (name === "welcome") {
 		settings.classList.remove("hidden");
+		$("settingsTab").classList.remove("hidden");
 		$("cleanBanner").classList.add("hidden");
 		currentCleanables = null;
 		renderStatsWidget();
 	} else {
 		settings.classList.add("hidden");
+		settings.classList.remove("settings-open");
+		$("settingsTab").classList.add("hidden");
+		$("settingsTab").classList.remove("settings-tab-hidden");
+		$("settingsOverlayBackdrop").classList.remove("visible");
 	}
 }
 
@@ -1485,6 +1490,28 @@ scanPathInput.addEventListener("focus", () => {
 	if (scanPathInput.value) fetchSuggestions(scanPathInput.value);
 });
 
+// --- Settings (responsive collapsed tab) ---
+const settingsTab = $("settingsTab");
+const settingsOverlayBackdrop = $("settingsOverlayBackdrop");
+
+function openSettingsPanel() {
+	const settings = $("settingsSection");
+	settings.classList.add("settings-open");
+	settings.classList.remove("hidden");
+	settingsTab.classList.add("settings-tab-hidden");
+	settingsOverlayBackdrop.classList.add("visible");
+}
+
+function closeSettingsPanel() {
+	const settings = $("settingsSection");
+	settings.classList.remove("settings-open");
+	settingsTab.classList.remove("settings-tab-hidden");
+	settingsOverlayBackdrop.classList.remove("visible");
+}
+
+settingsTab.addEventListener("click", openSettingsPanel);
+settingsOverlayBackdrop.addEventListener("click", closeSettingsPanel);
+
 // --- Settings ---
 const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
 const settingMaxDepth = $("settingMaxDepth") as HTMLInputElement;
@@ -1561,6 +1588,7 @@ function applyTranslations() {
 
 	// Settings
 	$("settingsHeaderText").textContent = tr.settingsTitle;
+	$("settingsTabText").textContent = tr.settingsTitle;
 	$("settingLangLabel").textContent = tr.language;
 	$("settingMaxCacheLabel").textContent = tr.maxCache;
 	$("settingMaxDepthLabel").textContent = tr.scanDepth;
@@ -1735,6 +1763,13 @@ document.addEventListener("keydown", (e) => {
 	if (e.key === "Escape" && infoPanelOpen) {
 		e.preventDefault();
 		closeInfoPanel();
+		return;
+	}
+
+	// Close settings overlay on Escape (small screens)
+	if (e.key === "Escape" && $("settingsSection").classList.contains("settings-open")) {
+		e.preventDefault();
+		closeSettingsPanel();
 		return;
 	}
 

@@ -258,14 +258,7 @@ body {
 	color: var(--danger);
 }
 
-/* Settings section */
-.settings-section {
-	position: fixed;
-	bottom: 16px;
-	right: 20px;
-	z-index: 50;
-	text-align: left;
-}
+/* Settings section — base (hidden, managed by JS toggle) */
 .settings-header {
 	display: flex;
 	align-items: center;
@@ -1372,4 +1365,75 @@ body {
 	opacity: 0.5;
 	user-select: none;
 	-webkit-app-region: no-drag;
+}
+
+/* --- Settings: collapsed tab + overlay panel --- */
+.settings-section {
+	display: none;
+	position: fixed;
+	bottom: 0;
+	right: 0;
+	top: 38px;
+	z-index: 160;
+	background: var(--surface);
+	border-left: 1px solid var(--border);
+	padding: 20px;
+	min-width: 260px;
+	max-width: 300px;
+	box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+}
+.settings-section.settings-open {
+	display: block;
+}
+
+.settings-tab {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	position: fixed;
+	right: 0;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 55;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-right: none;
+	border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+	padding: 12px 6px;
+	cursor: pointer;
+	color: var(--text-muted);
+	transition: color 0.15s, background 0.15s;
+	-webkit-app-region: no-drag;
+}
+.settings-tab:hover {
+	color: var(--text);
+	background: var(--surface-hover);
+}
+.settings-tab .icon {
+	flex-shrink: 0;
+}
+.settings-tab-text {
+	writing-mode: vertical-rl;
+	text-orientation: mixed;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.5px;
+	white-space: nowrap;
+}
+
+.settings-overlay-backdrop {
+	display: none;
+}
+.settings-overlay-backdrop.visible {
+	display: block;
+	position: fixed;
+	inset: 0;
+	top: 38px;
+	z-index: 155;
+	background: rgba(0, 0, 0, 0.5);
+}
+
+.settings-tab.settings-tab-hidden {
+	display: none;
 }
