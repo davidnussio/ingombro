@@ -90,8 +90,63 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-cli:
+    # Terminal UI (src/tui): single binary compiled with `bun build --compile`.
+    # Each runner builds its own platform so the matching OpenTUI native package is installed.
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout del codice
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Allinea versione (per ingombro --version)
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json && rm -f package.json.bak
+
+      - name: Setup di Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Installa le dipendenze
+        run: bun install
+
+      - name: Compila il binario
+        shell: bash
+        run: |
+          bun run build:tui
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            codesign --force --sign - build-cli/ingombro
+          fi
+          ./build-cli/ingombro --version
+          tar -czf "ingombro-cli-${{ matrix.target }}.tar.gz" -C build-cli ingombro
+          shasum -a 256 "ingombro-cli-${{ matrix.target }}.tar.gz" > "ingombro-cli-${{ matrix.target }}.tar.gz.sha256"
+
+      - name: Pubblica su GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.event.release.tag_name }}
+          prerelease: ${{ github.event.release.prerelease || inputs.prerelease || false }}
+          files: |
+            ingombro-cli-${{ matrix.target }}.tar.gz
+            ingombro-cli-${{ matrix.target }}.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   update-homebrew:
-    needs: build-and-release
+    needs: [build-and-release, build-cli]
     if: ${{ !(github.event.release.prerelease || inputs.prerelease || false) }}
     runs-on: ubuntu-latest
     steps:
@@ -122,6 +177,29 @@ jobs:
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
         id: dmg
+
+      - name: Calcola SHA256 dei binari CLI
+        id: cli
+        run: |
+          TAG="${{ inputs.tag || github.event.release.tag_name }}"
+          BASE="https://github.com/davidnussio/ingombro/releases/download/${TAG}"
+          for target in darwin-arm64 linux-x64; do
+            URL="${BASE}/ingombro-cli-${target}.tar.gz"
+            for i in 1 2 3 4 5; do
+              HTTP_CODE=$(curl -sL -o cli.tar.gz -w "%{http_code}" "$URL")
+              [ "$HTTP_CODE" = "200" ] && break
+              echo "Attempt $i ($target): got HTTP $HTTP_CODE, retrying in 15s..."
+              sleep 15
+            done
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Failed to download $URL"
+              exit 1
+            fi
+            KEY=$(echo "$target" | tr '-' '_')
+            echo "sha_${KEY}=$(shasum -a 256 cli.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "url_${KEY}=${URL}" >> "$GITHUB_OUTPUT"
+            rm cli.tar.gz
+          done
 
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
@@ -154,11 +232,44 @@ jobs:
           EOF
           sed -i 's/^          //' Casks/ingombro.rb
 
+      - name: Aggiorna formula ingombro-cli
+        run: |
+          mkdir -p Formula
+          cat > Formula/ingombro-cli.rb << 'EOF'
+          class IngombroCli < Formula
+            desc "Terminal UI for the Ingombro disk space analyzer and cleaner"
+            homepage "https://github.com/davidnussio/ingombro"
+            version "${{ steps.dmg.outputs.version }}"
+            license "MIT"
+
+            on_macos do
+              depends_on arch: :arm64
+              url "${{ steps.cli.outputs.url_darwin_arm64 }}"
+              sha256 "${{ steps.cli.outputs.sha_darwin_arm64 }}"
+            end
+
+            on_linux do
+              depends_on arch: :x86_64
+              url "${{ steps.cli.outputs.url_linux_x64 }}"
+              sha256 "${{ steps.cli.outputs.sha_linux_x64 }}"
+            end
+
+            def install
+              bin.install "ingombro"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/ingombro --version")
+            end
+          end
+          EOF
+          sed -i 's/^          //' Formula/ingombro-cli.rb
+
       - name: Commit and push
         run: |
           VERSION="${{ steps.dmg.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/ingombro.rb
+          git add Casks/ingombro.rb Formula/ingombro-cli.rb
           git commit -m "ingombro ${VERSION}"
           git push
