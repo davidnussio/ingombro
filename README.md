@@ -74,6 +74,48 @@ Scan results and Smart Clean analysis are cached. Reopening a directory from cac
 
 Automatic detection of system language with manual override.
 
+## Terminal UI
+
+Ingombro also ships a keyboard-driven terminal interface in the style of [lazygit](https://github.com/jesseduffield/lazygit) and [lazydocker](https://github.com/jesseduffield/lazydocker), built with [OpenTUI](https://opentui.com). It shares the scanner, Smart Clean rules, cache, settings and stats with the desktop app (`~/.ingombro`), so a folder scanned in one opens instantly in the other.
+
+```bash
+bun run tui ~/Developer          # run from source
+bun run build:tui                # single binary in build-cli/ingombro
+./build-cli/ingombro ~/Developer --rescan
+```
+
+```
+╭─ [1] Scans ─────────────────────╮╭─ [3] ~/Developer · 33.9 MB ───────────────────────────────╮
+│▸ ~/Developer     33.9 MB  1s ago││  assets/                            20.0 MB ████████   59%│
+│                                 ││  ingombro-cli/                      13.4 MB █████▍··   39%│
+╰─────────────────────────────────╯│  ml-lab/                           400.0 KB ▏·······  1.2%│
+╭─ [2] Smart Clean · 5 · 30.3 MB ─╮│  shop-web/                          96.0 KB ▏·······  0.3%│
+│◉ ● target                13.4 MB││                                                           │
+│◉ ● node_modules           8.6 MB││                                                           │
+│○ ● .venv                  5.7 MB││                                                           │
+│○ ● .next                  2.4 MB││                                                           │
+│○ ● .ipynb_checkpoints   296.0 KB││                                                           │
+│                                 ││                                                           │
+│                                 │╰──────────────────────────────────────── sort: size · 1/4 ─╯
+│                                 │╭─ [4] Details · assets/ ───────────────────────────────────╮
+│                                 ││Path          ~/Developer/assets                           │
+│                                 ││Size          20.0 MB                                      │
+│                                 ││Contents      folders: 1 · files: 0                        │
+│                                 ││Modified      2026-10-22 21:28                             │
+│                                 ││Created       2026-10-22 21:28                             │
+╰──── 2 selected · 21.9 MB · all ─╯╰───────────────────────────────────────────────────────────╯
+ ↑↓ move  ⏎ open  ⌫ back  space mark  d delete  / filter         Scanned 33.9 MB in 0.0s  Trash
+```
+
+| Panel | Keys |
+|---|---|
+| Global | `1`-`4` / `tab` switch panel · `n` new scan (with path completion) · `/` filter · `m` trash/permanent · `?` help · `q` quit |
+| [3] Files | `j`/`k` move · `enter`/`l` open · `backspace`/`h` back · `space` mark · `d` delete · `s` sort size/name · `e` reveal in Finder · `r` rescan |
+| [2] Smart Clean | `space` select · `a` select all · `c` cycle category · `d` delete selected · `enter` jump to folder · `r` re-detect |
+| [1] Scans | `enter` open cached scan · `r` rescan · `d` forget |
+
+Smart Clean is scoped to the folder you are browsing, exactly like the desktop app. The UI follows `LANG` (English or Italian); override with `INGOMBRO_LANG=en|it`.
+
 ## Requirements
 
 - macOS
@@ -142,6 +184,8 @@ Accessible from the home screen, saved in `~/.ingombro/settings.json`:
 - **Desktop framework**: [Electrobun](https://electrobun.dev/)
 - **Language**: TypeScript
 - **UI**: Vanilla HTML/CSS + Canvas (treemap)
+- **Terminal UI**: [OpenTUI](https://opentui.com) (`src/tui`)
+- **Shared core**: scanner, Smart Clean, cache, settings (`src/core`)
 
 ## License
 

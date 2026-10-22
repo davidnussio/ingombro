@@ -148,3 +148,6 @@ artifacts
 
 # MacOS
 .DS_Store
+
+# TUI binary
+build-cli/
