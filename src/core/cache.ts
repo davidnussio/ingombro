@@ -1,86 +1,25 @@
-import { rmSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
-import { APP_DIR, ensureAppDir } from "./paths";
-import { loadSettings } from "./settings";
-import { logger } from "./log";
-import type { CacheData, CacheEntry, DirEntry } from "./types";
+import { Context, Effect, FileSystem, Layer, Option, Schema, Semaphore } from "effect";
+import { AppPaths } from "./paths";
+import { Settings } from "./settings";
+import {
+	CacheData,
+	LegacyCacheData,
+	type CacheEntry,
+	type CacheListItem,
+	type CleanableResult,
+	type DirEntry,
+} from "./types";
 
-const CACHE_FILE = join(APP_DIR, "cache.json.gz");
-const OLD_CACHE_FILE = join(homedir(), ".diskscanner_cache.json");
-const OLD_CACHE_FILE_UNGZ = join(APP_DIR, "cache.json");
+// ─── Pure tree / store helpers ──────────────────────────────────────────────
 
-let migrated = false;
-
-/** One-time migration from legacy cache locations. */
-async function migrateLegacyCache() {
-	if (migrated) return;
-	migrated = true;
-	try {
-		if (await Bun.file(CACHE_FILE).exists()) return;
-		ensureAppDir();
-		for (const legacy of [OLD_CACHE_FILE, OLD_CACHE_FILE_UNGZ]) {
-			if (await Bun.file(legacy).exists()) {
-				const oldData = await Bun.file(legacy).text();
-				await Bun.write(CACHE_FILE, Bun.gzipSync(new TextEncoder().encode(oldData)));
-				rmSync(legacy, { force: true });
-				return;
-			}
-		}
-	} catch {}
-}
-
-function normalize(parsed: any): CacheData {
-	// Migrate old single-entry format
-	if (parsed && !parsed.entries && parsed.rootPath) {
-		return { entries: [{ timestamp: parsed.timestamp, rootPath: parsed.rootPath, tree: parsed.tree }] };
-	}
-	return parsed as CacheData;
-}
-
-export async function loadCacheStore(): Promise<CacheData> {
-	await migrateLegacyCache();
-	const cacheFile = Bun.file(CACHE_FILE);
-	try {
-		if (await cacheFile.exists()) {
-			const raw = Bun.gunzipSync(new Uint8Array(await cacheFile.arrayBuffer()));
-			return normalize(JSON.parse(new TextDecoder().decode(raw)));
-		}
-	} catch {
-		// Fallback: plain JSON (pre-compression)
-		try {
-			if (await cacheFile.exists()) return normalize(await cacheFile.json());
-		} catch {}
-	}
-	return { entries: [] };
-}
-
-export async function saveCacheStore(data: CacheData): Promise<void> {
-	try {
-		ensureAppDir();
-		const json = JSON.stringify(data);
-		logger.log(`[cache] Saving cache (hash=${Bun.hash(json).toString(16)}, entries=${data.entries.length})`);
-		await Bun.write(CACHE_FILE, Bun.gzipSync(new TextEncoder().encode(json)));
-	} catch (e) {
-		logger.error("[ingombro] Failed to save cache:", e);
-	}
-}
-
-export async function upsertCacheEntry(store: CacheData, entry: CacheEntry): Promise<CacheData> {
-	const settings = await loadSettings();
-	const filtered = store.entries.filter((e) => e.rootPath !== entry.rootPath);
-	filtered.unshift(entry);
-	return { entries: filtered.slice(0, settings.maxCacheEntries) };
-}
-
-export function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | null {
-	return store.entries.find((e) => e.rootPath === rootPath) || null;
+export function findCacheEntry(store: CacheData, rootPath: string): CacheEntry | undefined {
+	return store.entries.find((e) => e.rootPath === rootPath);
 }
 
 /** Most recent first, one entry per rootPath. */
-export function listCacheEntries(store: CacheData): { rootPath: string; timestamp: number; size: number }[] {
+export function listCacheEntries(store: CacheData): CacheListItem[] {
 	const seen = new Set<string>();
-	const out: { rootPath: string; timestamp: number; size: number }[] = [];
+	const out: CacheListItem[] = [];
 	for (const e of store.entries) {
 		if (seen.has(e.rootPath)) continue;
 		seen.add(e.rootPath);
@@ -89,66 +28,193 @@ export function listCacheEntries(store: CacheData): { rootPath: string; timestam
 	return out;
 }
 
-export async function deleteCacheEntry(rootPath: string) {
-	const store = await loadCacheStore();
-	store.entries = store.entries.filter((e) => e.rootPath !== rootPath);
-	await saveCacheStore(store);
-}
-
-export function findNode(tree: DirEntry, path: string): DirEntry | null {
+export function findNode(tree: DirEntry, path: string): DirEntry | undefined {
 	if (tree.path === path) return tree;
-	if (!tree.children || !path.startsWith(tree.path)) return null;
+	if (!tree.children || !path.startsWith(tree.path)) return undefined;
 	for (const child of tree.children) {
 		const found = findNode(child, path);
 		if (found) return found;
 	}
-	return null;
+	return undefined;
 }
 
 /** Children of `dirPath` from whichever cached tree contains it. */
-export function findChildrenInStore(store: CacheData, dirPath: string): DirEntry[] {
+export function findChildrenInStore(store: CacheData, dirPath: string): ReadonlyArray<DirEntry> {
 	for (const cacheEntry of store.entries) {
 		if (dirPath.startsWith(cacheEntry.rootPath)) {
 			const found = findNode(cacheEntry.tree, dirPath);
-			if (found) return found.children || [];
+			if (found) return found.children ?? [];
 		}
 	}
 	return [];
 }
 
-/** Remove `targetPath` from a cached tree, propagating the size change upwards. */
-export function removeFromTree(tree: DirEntry, targetPath: string): boolean {
-	function removeFromEntry(entry: DirEntry): number {
-		if (!entry.children) return 0;
-		const idx = entry.children.findIndex((c) => c.path === targetPath);
-		if (idx !== -1) {
-			const removed = entry.children[idx]!;
-			entry.children.splice(idx, 1);
-			entry.size -= removed.size;
-			return removed.size;
-		}
-		for (const child of entry.children) {
-			const removedSize = removeFromEntry(child);
-			if (removedSize > 0) {
-				entry.size -= removedSize;
-				return removedSize;
-			}
-		}
-		return 0;
+/**
+ * Remove `targetPath` from a tree, propagating the size change upwards.
+ * Returns the new tree (only the branch leading to the target is copied), or undefined if not found.
+ */
+export function removeFromTree(tree: DirEntry, targetPath: string): DirEntry | undefined {
+	if (!tree.children) return undefined;
+	const idx = tree.children.findIndex((c) => c.path === targetPath);
+	if (idx !== -1) {
+		const removed = tree.children[idx]!;
+		return { ...tree, size: tree.size - removed.size, children: tree.children.toSpliced(idx, 1) };
 	}
-	return removeFromEntry(tree) > 0;
+	for (const [i, child] of tree.children.entries()) {
+		const updated = removeFromTree(child, targetPath);
+		if (updated) {
+			return {
+				...tree,
+				size: tree.size - (child.size - updated.size),
+				children: tree.children.with(i, updated),
+			};
+		}
+	}
+	return undefined;
 }
 
-export function removeDirFromCacheEntry(cacheEntry: CacheEntry, targetPath: string): boolean {
-	const removed = removeFromTree(cacheEntry.tree, targetPath);
-	if (cacheEntry.cleanables) {
-		const before = cacheEntry.cleanables.items.length;
-		cacheEntry.cleanables.items = cacheEntry.cleanables.items.filter(
-			(i) => i.path !== targetPath && !i.path.startsWith(targetPath + "/"),
-		);
-		if (cacheEntry.cleanables.items.length !== before) {
-			cacheEntry.cleanables.totalSize = cacheEntry.cleanables.items.reduce((s, i) => s + i.size, 0);
+/** Drop `targetPath` (and anything below it) from a cache entry's tree and cleanables. Undefined if nothing changed. */
+export function removeDirFromCacheEntry(cacheEntry: CacheEntry, targetPath: string): CacheEntry | undefined {
+	const tree = removeFromTree(cacheEntry.tree, targetPath);
+	let cleanables = cacheEntry.cleanables;
+	if (cleanables) {
+		const items = cleanables.items.filter((i) => i.path !== targetPath && !i.path.startsWith(targetPath + "/"));
+		if (items.length !== cleanables.items.length) {
+			cleanables = { items, totalSize: items.reduce((s, i) => s + i.size, 0) };
 		}
 	}
-	return removed;
+	if (!tree && cleanables === cacheEntry.cleanables) return undefined;
+	return { ...cacheEntry, tree: tree ?? cacheEntry.tree, cleanables };
+}
+
+/** Put `entry` first, replacing any previous scan of the same root, keeping at most `max` entries. */
+export function upsertEntry(store: CacheData, entry: CacheEntry, max: number): CacheData {
+	return { entries: [entry, ...store.entries.filter((e) => e.rootPath !== entry.rootPath)].slice(0, max) };
+}
+
+// ─── Persistence ────────────────────────────────────────────────────────────
+
+const CacheJson = Schema.fromJsonString(CacheData);
+const LegacyCacheJson = Schema.fromJsonString(LegacyCacheData);
+
+/**
+ * The gzipped scan cache (~/.ingombro/cache.json.gz). Reads never fail (empty cache instead),
+ * writes are logged on failure. Read-modify-write operations are serialized.
+ */
+export class CacheStore extends Context.Service<
+	CacheStore,
+	{
+		readonly load: Effect.Effect<CacheData>;
+		save(data: CacheData): Effect.Effect<void>;
+		/** Atomically transform the stored cache; `f` returns undefined to leave it untouched. */
+		update(f: (data: CacheData) => CacheData | undefined): Effect.Effect<void>;
+		findEntry(rootPath: string): Effect.Effect<Option.Option<CacheEntry>>;
+		/** Store a fresh scan (most recent first, capped by settings.maxCacheEntries). */
+		upsert(entry: CacheEntry): Effect.Effect<void>;
+		remove(rootPath: string): Effect.Effect<void>;
+		trim(maxEntries: number): Effect.Effect<void>;
+		/** Attach Smart Clean results to a cached scan. False if the scan is not cached. */
+		setCleanables(rootPath: string, cleanables: CleanableResult): Effect.Effect<boolean>;
+		/** Prune deleted paths from every cached tree. */
+		pruneDeleted(paths: ReadonlyArray<string>): Effect.Effect<void>;
+	}
+>()("ingombro/core/CacheStore") {
+	static readonly layer = Layer.effect(
+		CacheStore,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const paths = yield* AppPaths;
+			const settings = yield* Settings;
+			const lock = yield* Semaphore.make(1);
+
+			const decodeText = (text: string) =>
+				Schema.decodeUnknownEffect(CacheJson)(text).pipe(
+					Effect.catch(() =>
+						Schema.decodeUnknownEffect(LegacyCacheJson)(text).pipe(
+							Effect.map((legacy): CacheData => ({ entries: [legacy] })),
+						),
+					),
+				);
+
+			// One-time migration from legacy cache locations
+			yield* Effect.gen(function* () {
+				if (yield* fs.exists(paths.cacheFile)) return;
+				for (const legacy of paths.legacyCacheFiles) {
+					if (!(yield* fs.exists(legacy))) continue;
+					yield* paths.ensureAppDir;
+					const text = yield* fs.readFileString(legacy);
+					yield* fs.writeFile(paths.cacheFile, Bun.gzipSync(new TextEncoder().encode(text)));
+					yield* fs.remove(legacy, { force: true });
+					return;
+				}
+			}).pipe(Effect.ignore);
+
+			const load = Effect.gen(function* () {
+				const bytes = yield* fs.readFile(paths.cacheFile);
+				const text = yield* Effect.try(() => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(bytes)))).pipe(
+					// Fallback: plain JSON (pre-compression)
+					Effect.orElseSucceed(() => new TextDecoder().decode(bytes)),
+				);
+				return yield* decodeText(text);
+			}).pipe(
+				Effect.orElseSucceed((): CacheData => ({ entries: [] })),
+				Effect.withSpan("CacheStore.load"),
+			);
+
+			const save = Effect.fn("CacheStore.save")(
+				function* (data: CacheData) {
+					yield* paths.ensureAppDir;
+					const json = yield* Schema.encodeEffect(CacheJson)(data);
+					yield* Effect.logDebug(`[cache] Saving cache (hash=${Bun.hash(json).toString(16)}, entries=${data.entries.length})`);
+					yield* fs.writeFile(paths.cacheFile, Bun.gzipSync(new TextEncoder().encode(json)));
+				},
+				Effect.catch((e) => Effect.logError("[ingombro] Failed to save cache:", e)),
+			);
+
+			const update = (f: (data: CacheData) => CacheData | undefined) =>
+				Effect.gen(function* () {
+					const next = f(yield* load);
+					if (next) yield* save(next);
+				}).pipe(Semaphore.withPermit(lock));
+
+			const findEntry = (rootPath: string) =>
+				load.pipe(Effect.map((store) => Option.fromNullishOr(findCacheEntry(store, rootPath))));
+
+			const upsert = Effect.fn("CacheStore.upsert")(function* (entry: CacheEntry) {
+				const { maxCacheEntries } = yield* settings.get;
+				yield* update((store) => upsertEntry(store, entry, maxCacheEntries));
+			});
+
+			const remove = (rootPath: string) =>
+				update((store) => ({ entries: store.entries.filter((e) => e.rootPath !== rootPath) }));
+
+			const trim = (maxEntries: number) =>
+				update((store) => (store.entries.length > maxEntries ? { entries: store.entries.slice(0, maxEntries) } : undefined));
+
+			const setCleanables = Effect.fn("CacheStore.setCleanables")(function* (rootPath: string, cleanables: CleanableResult) {
+				let found = false;
+				yield* update((store) => {
+					const idx = store.entries.findIndex((e) => e.rootPath === rootPath);
+					if (idx === -1) return undefined;
+					found = true;
+					return { entries: store.entries.with(idx, { ...store.entries[idx]!, cleanables }) };
+				});
+				return found;
+			});
+
+			const pruneDeleted = (deleted: ReadonlyArray<string>) =>
+				update((store) => {
+					let changed = false;
+					const entries = store.entries.map((entry) => {
+						let current = entry;
+						for (const p of deleted) current = removeDirFromCacheEntry(current, p) ?? current;
+						if (current !== entry) changed = true;
+						return current;
+					});
+					return changed ? { entries } : undefined;
+				});
+
+			return CacheStore.of({ load, save, update, findEntry, upsert, remove, trim, setCleanables, pruneDeleted });
+		}),
+	);
 }

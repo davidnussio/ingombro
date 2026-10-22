@@ -1,53 +1,63 @@
-import { join } from "path";
-import { APP_DIR, ensureAppDir } from "./paths";
-import type { StatsData, StatsEntry } from "./types";
+import { Context, DateTime, Effect, FileSystem, Layer, Schema } from "effect";
+import { AppPaths } from "./paths";
+import { StatsData, type StatsSummary } from "./types";
 
-const STATS_FILE = join(APP_DIR, "stats.json");
+const StatsJson = Schema.fromJsonString(StatsData, { space: 2 });
 
-export async function loadStats(): Promise<StatsData> {
-	try {
-		ensureAppDir();
-		if (await Bun.file(STATS_FILE).exists()) {
-			return (await Bun.file(STATS_FILE).json()) as StatsData;
-		}
-	} catch {}
-	return { entries: [] };
-}
-
-async function saveStats(data: StatsData) {
-	try {
-		ensureAppDir();
-		await Bun.write(STATS_FILE, JSON.stringify(data, null, 2));
-	} catch (e) {
-		console.error("[ingombro] Failed to save stats:", e);
+/** Daily "freed space" history (stats.json), kept for the last 90 days. */
+export class Stats extends Context.Service<
+	Stats,
+	{
+		recordDeletion(freedBytes: number, deleteCount: number): Effect.Effect<void>;
+		summary(days: number): Effect.Effect<StatsSummary>;
 	}
-}
+>()("ingombro/core/Stats") {
+	static readonly layer = Layer.effect(
+		Stats,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const paths = yield* AppPaths;
 
-export async function recordDeletion(freedBytes: number, deleteCount: number) {
-	const stats = await loadStats();
-	const today = new Date().toISOString().slice(0, 10);
-	const existing = stats.entries.find((e) => e.date === today);
-	if (existing) {
-		existing.freedBytes += freedBytes;
-		existing.deleteCount += deleteCount;
-	} else {
-		stats.entries.push({ date: today, freedBytes, deleteCount });
-	}
-	// Keep last 90 days max
-	stats.entries.sort((a, b) => a.date.localeCompare(b.date));
-	if (stats.entries.length > 90) stats.entries = stats.entries.slice(-90);
-	await saveStats(stats);
-}
+			const load = fs.readFileString(paths.statsFile).pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(StatsJson)),
+				Effect.orElseSucceed((): StatsData => ({ entries: [] })),
+			);
 
-export async function getStats(days: number): Promise<{ entries: StatsEntry[]; totalFreed: number; totalDeleted: number }> {
-	const stats = await loadStats();
-	const cutoff = new Date();
-	cutoff.setDate(cutoff.getDate() - days);
-	const cutoffStr = cutoff.toISOString().slice(0, 10);
-	const entries = stats.entries.filter((e) => e.date >= cutoffStr);
-	return {
-		entries,
-		totalFreed: entries.reduce((s, e) => s + e.freedBytes, 0),
-		totalDeleted: entries.reduce((s, e) => s + e.deleteCount, 0),
-	};
+			const save = (data: StatsData) =>
+				Effect.gen(function* () {
+					yield* paths.ensureAppDir;
+					yield* fs.writeFileString(paths.statsFile, yield* Schema.encodeEffect(StatsJson)(data));
+				}).pipe(Effect.catch((e) => Effect.logError("[ingombro] Failed to save stats:", e)));
+
+			const recordDeletion = Effect.fn("Stats.recordDeletion")(function* (freedBytes: number, deleteCount: number) {
+				const stats = yield* load;
+				const today = DateTime.formatIsoDateUtc(yield* DateTime.now);
+				const existing = stats.entries.find((e) => e.date === today);
+				const entries = existing
+					? stats.entries.map((e) =>
+							e === existing
+								? { ...e, freedBytes: e.freedBytes + freedBytes, deleteCount: e.deleteCount + deleteCount }
+								: e,
+						)
+					: [...stats.entries, { date: today, freedBytes, deleteCount }];
+				// Keep last 90 days max
+				const sorted = entries.toSorted((a, b) => a.date.localeCompare(b.date));
+				yield* save({ entries: sorted.slice(-90) });
+			});
+
+			const summary = Effect.fn("Stats.summary")(function* (days: number) {
+				const stats = yield* load;
+				const now = yield* DateTime.now;
+				const cutoff = DateTime.formatIsoDateUtc(DateTime.subtract(now, { days }));
+				const entries = stats.entries.filter((e) => e.date >= cutoff);
+				return {
+					entries,
+					totalFreed: entries.reduce((s, e) => s + e.freedBytes, 0),
+					totalDeleted: entries.reduce((s, e) => s + e.deleteCount, 0),
+				};
+			});
+
+			return Stats.of({ recordDeletion, summary });
+		}),
+	);
 }

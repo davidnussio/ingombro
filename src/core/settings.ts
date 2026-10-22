@@ -1,19 +1,6 @@
-import { join } from "path";
-import { APP_DIR, ensureAppDir } from "./paths";
-import { DEFAULT_SETTINGS, type AppSettings } from "./types";
-
-const SETTINGS_FILE = join(APP_DIR, "settings.json");
-
-export async function loadSettings(): Promise<AppSettings> {
-	try {
-		ensureAppDir();
-		if (await Bun.file(SETTINGS_FILE).exists()) {
-			const parsed = await Bun.file(SETTINGS_FILE).json();
-			return { ...DEFAULT_SETTINGS, ...parsed };
-		}
-	} catch {}
-	return { ...DEFAULT_SETTINGS };
-}
+import { Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { AppPaths } from "./paths";
+import { DEFAULT_SETTINGS, SettingsFile, type AppSettings } from "./types";
 
 export function normalizeSettings(input: { maxCacheEntries: number; deleteMode: string; maxDepth: number }): AppSettings {
 	return {
@@ -23,11 +10,38 @@ export function normalizeSettings(input: { maxCacheEntries: number; deleteMode: 
 	};
 }
 
-export async function saveSettings(settings: AppSettings) {
-	try {
-		ensureAppDir();
-		await Bun.write(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-	} catch (e) {
-		console.error("[ingombro] Failed to save settings:", e);
+/** settings.json: unreadable or invalid files fall back to the defaults, write failures are logged. */
+export class Settings extends Context.Service<
+	Settings,
+	{
+		readonly get: Effect.Effect<AppSettings>;
+		save(settings: AppSettings): Effect.Effect<void>;
 	}
+>()("ingombro/core/Settings") {
+	static readonly layer = Layer.effect(
+		Settings,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const paths = yield* AppPaths;
+			const SettingsJson = Schema.fromJsonString(SettingsFile, { space: 2 });
+			const decode = Schema.decodeUnknownEffect(SettingsJson);
+			const encode = Schema.encodeEffect(SettingsJson);
+
+			const get = fs.readFileString(paths.settingsFile).pipe(
+				Effect.flatMap(decode),
+				Effect.orElseSucceed((): AppSettings => ({ ...DEFAULT_SETTINGS })),
+				Effect.withSpan("Settings.get"),
+			);
+
+			const save = Effect.fn("Settings.save")(
+				function* (settings: AppSettings) {
+					yield* paths.ensureAppDir;
+					yield* fs.writeFileString(paths.settingsFile, yield* encode(settings));
+				},
+				Effect.catch((e) => Effect.logError("[ingombro] Failed to save settings:", e)),
+			);
+
+			return Settings.of({ get, save });
+		}),
+	);
 }

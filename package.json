@@ -13,11 +13,14 @@
 		"build:stable": "electrobun build --env=stable",
 		"tui": "bun src/tui/main.ts",
 		"build:tui": "bun build src/tui/main.ts --compile --minify --outfile build-cli/ingombro",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
 	},
 	"dependencies": {
+		"@effect/platform-bun": "4.0.5",
 		"@envsec/sdk": "^1.0.0-beta.15",
 		"@opentui/core": "^0.6.6",
+		"effect": "4.0.5",
 		"electrobun": "1.16.0"
 	},
 	"devDependencies": {

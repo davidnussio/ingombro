@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from "fs";
+import { readdirSync, readFileSync, statSync, type Dirent } from "fs";
 import { extname, join } from "path";
-import { getDirSizeRecursive } from "./scanner";
-import type { CancelToken, Category, CleanableItem, CleanableResult, RiskLevel } from "./types";
+import { Context, Effect, Layer } from "effect";
+import { Scanner } from "./scanner";
+import type { Category, CleanableItem, CleanableResult, RiskLevel } from "./types";
 
 // --- Smart Clean: cleanable folder detection ---
 
@@ -219,174 +220,173 @@ function sentinelExists(dirPath: string, sentinel: string): boolean {
 	return !!statSync(join(dirPath, sentinel), { throwIfNoEntry: false });
 }
 
-export interface DetectOptions {
-	maxDepth?: number;
-	cancel?: CancelToken;
-	/** Called for every directory walked (not throttled). */
-	onDir?: (dirPath: string) => void;
+/** Rules without sentinels always match; otherwise one sentinel must exist next to the folder. */
+function sentinelsConfirmed(dirPath: string, rule: CleanableRule): boolean {
+	return rule.sentinels.length === 0 || rule.sentinels.some((s) => sentinelExists(dirPath, s));
 }
 
-export async function detectCleanables(rootPath: string, opts: DetectOptions = {}): Promise<CleanableResult> {
-	const maxDepth = opts.maxDepth ?? 8;
-	const cancel = opts.cancel ?? { cancelled: false };
-	const items: CleanableItem[] = [];
+/** Own-property lookup, so names like "constructor" never hit Object.prototype. */
+function ruleFor(name: string): CleanableRule | undefined {
+	return Object.hasOwn(CLEANABLE_RULES, name) ? CLEANABLE_RULES[name] : undefined;
+}
 
-	let lastYield = Date.now();
-	async function walk(dirPath: string, depth: number): Promise<void> {
-		if (depth > maxDepth) return;
-		if (cancel.cancelled) return;
-		opts.onDir?.(dirPath);
-		// Yield to the event loop now and then so UIs can repaint / cancel
-		if (Date.now() - lastYield > 50) {
-			lastYield = Date.now();
-			await Bun.sleep(0);
-		}
-		try {
-			const entries = readdirSync(dirPath, { withFileTypes: true });
-			for (const entry of entries) {
-				if (cancel.cancelled) return;
-				if (entry.name === ".Trash") continue;
+export interface DetectOptions {
+	readonly maxDepth?: number;
+	/** Called for every directory walked (not throttled). */
+	readonly onDir?: (dirPath: string) => Effect.Effect<void>;
+}
 
-				const fullPath = join(dirPath, entry.name);
+type Pending = Omit<CleanableItem, "size">;
 
-				// Gestione file speciali (non-directory): .DS_Store, Thumbs.db, Desktop.ini
-				if (!entry.isDirectory()) {
-					// --- Sensitive file detection (.env, keys, credentials) ---
-					if (isSensitiveFileName(entry.name)) {
-						try {
-							const stat = statSync(fullPath, { throwIfNoEntry: false });
-							const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
-							if (fileSize > 0) {
-								// For .env files, always flag. For key/pem files, check content too.
-								const ext = extname(entry.name).toLowerCase();
-								const alwaysSensitive = isEnvSensitive(entry.name) || SENSITIVE_FILE_NAMES.has(entry.name);
-								const contentSensitive = SENSITIVE_CHECK_EXTENSIONS.has(ext) || checkFileForSecrets(fullPath, stat?.size ?? 0);
-								if (alwaysSensitive || contentSensitive) {
-									items.push({
-										path: fullPath,
-										projectPath: dirPath,
-										projectType: "Secrets",
-										folderName: entry.name,
-										size: fileSize,
-										risk: "high" as RiskLevel,
-										category: "secrets" as Category,
-										note: "sensitiveDataFound",
-									});
-								}
-							}
-						} catch {}
-						continue;
-					}
+/** Smart Clean: finds cleanable folders and sensitive files below a root. Interrupt the fiber to cancel. */
+export class Cleanables extends Context.Service<
+	Cleanables,
+	{
+		detect(rootPath: string, options?: DetectOptions): Effect.Effect<CleanableResult>;
+	}
+>()("ingombro/core/Cleanables") {
+	static readonly layer = Layer.effect(
+		Cleanables,
+		Effect.gen(function* () {
+			const scanner = yield* Scanner;
 
-					if (CLEANABLE_NAMES.has(entry.name)) {
-						const rule = CLEANABLE_RULES[entry.name];
-						if (rule) {
-							let confirmed = rule.sentinels.length === 0;
-							if (!confirmed) {
-								for (const sentinel of rule.sentinels) {
-									if (sentinelExists(dirPath, sentinel)) { confirmed = true; break; }
-								}
-							}
-							if (confirmed) {
-								try {
-									const stat = statSync(fullPath, { throwIfNoEntry: false });
-									const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
-									if (fileSize > 0) {
-										items.push({
+			/** Classify one directory's entries (sync, one fs pass). */
+			function inspect(dirPath: string) {
+				const found: CleanableItem[] = [];
+				const toSize: Pending[] = [];
+				const recurse: string[] = [];
+				let entries: Dirent[];
+				try {
+					entries = readdirSync(dirPath, { withFileTypes: true });
+				} catch {
+					return { found, toSize, recurse };
+				}
+				for (const entry of entries) {
+					if (entry.name === ".Trash") continue;
+					const fullPath = join(dirPath, entry.name);
+
+					// Gestione file speciali (non-directory): .DS_Store, Thumbs.db, Desktop.ini
+					if (!entry.isDirectory()) {
+						// --- Sensitive file detection (.env, keys, credentials) ---
+						if (isSensitiveFileName(entry.name)) {
+							try {
+								const stat = statSync(fullPath, { throwIfNoEntry: false });
+								const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
+								if (fileSize > 0) {
+									// For .env files, always flag. For key/pem files, check content too.
+									const ext = extname(entry.name).toLowerCase();
+									const alwaysSensitive = isEnvSensitive(entry.name) || SENSITIVE_FILE_NAMES.has(entry.name);
+									const contentSensitive = SENSITIVE_CHECK_EXTENSIONS.has(ext) || checkFileForSecrets(fullPath, stat?.size ?? 0);
+									if (alwaysSensitive || contentSensitive) {
+										found.push({
 											path: fullPath,
 											projectPath: dirPath,
-											projectType: rule.projectType,
+											projectType: "Secrets",
 											folderName: entry.name,
 											size: fileSize,
-											risk: rule.risk,
-											category: rule.category,
-											note: rule.note,
+											risk: "high",
+											category: "secrets",
+											note: "sensitiveDataFound",
 										});
 									}
-								} catch {}
-							}
+								}
+							} catch {}
+							continue;
 						}
-					}
-					continue;
-				}
 
-				// Disambiguazione vendor/
-				if (entry.name === "vendor") {
-					let vendorProjectType: string | null = null;
-					for (const v of VENDOR_DISAMBIG) {
-						if (statSync(join(dirPath, v.sentinel), { throwIfNoEntry: false })) {
-							vendorProjectType = v.projectType;
-							break;
-						}
-					}
-					if (vendorProjectType) {
-						const size = getDirSizeRecursive(fullPath);
-						if (size > 0) {
-							items.push({
-								path: fullPath,
-								projectPath: dirPath,
-								projectType: vendorProjectType,
-								folderName: entry.name,
-								size,
-								risk: "low" as RiskLevel,
-								category: "dev" as Category,
-							});
+						const rule = ruleFor(entry.name);
+						if (rule && sentinelsConfirmed(dirPath, rule)) {
+							try {
+								const stat = statSync(fullPath, { throwIfNoEntry: false });
+								const fileSize = stat ? (stat.blocks ?? 0) * 512 : 0;
+								if (fileSize > 0) {
+									found.push({
+										path: fullPath,
+										projectPath: dirPath,
+										projectType: rule.projectType,
+										folderName: entry.name,
+										size: fileSize,
+										risk: rule.risk,
+										category: rule.category,
+										note: rule.note,
+									});
+								}
+							} catch {}
 						}
 						continue;
 					}
-				}
 
-				if (CLEANABLE_NAMES.has(entry.name)) {
-					const rule = CLEANABLE_RULES[entry.name]!;
-					// Disambiguazione target/: identifica il tipo di progetto specifico
-					let resolvedProjectType = rule.projectType;
-					if (entry.name === "target" && rule.disambig) {
-						if (statSync(join(dirPath, "Cargo.toml"), { throwIfNoEntry: false })) {
-							resolvedProjectType = "Rust";
-						} else if (statSync(join(dirPath, "pom.xml"), { throwIfNoEntry: false })) {
-							resolvedProjectType = "Java/Maven";
+					// Disambiguazione vendor/
+					if (entry.name === "vendor") {
+						const vendor = VENDOR_DISAMBIG.find((v) => statSync(join(dirPath, v.sentinel), { throwIfNoEntry: false }));
+						if (vendor) {
+							toSize.push({
+								path: fullPath,
+								projectPath: dirPath,
+								projectType: vendor.projectType,
+								folderName: entry.name,
+								risk: "low",
+								category: "dev",
+							});
+							continue;
 						}
 					}
 
-					// Check sentinels in parent directory
-					let confirmed = rule.sentinels.length === 0;
-					if (!confirmed) {
-						for (const sentinel of rule.sentinels) {
-							if (sentinelExists(dirPath, sentinel)) {
-								confirmed = true;
-								break;
+					const rule = ruleFor(entry.name);
+					if (rule) {
+						// Disambiguazione target/: identifica il tipo di progetto specifico
+						let resolvedProjectType = rule.projectType;
+						if (entry.name === "target" && rule.disambig) {
+							if (statSync(join(dirPath, "Cargo.toml"), { throwIfNoEntry: false })) {
+								resolvedProjectType = "Rust";
+							} else if (statSync(join(dirPath, "pom.xml"), { throwIfNoEntry: false })) {
+								resolvedProjectType = "Java/Maven";
 							}
 						}
-					}
-					if (confirmed) {
-						const size = getDirSizeRecursive(fullPath);
-						if (size > 0) {
-							items.push({
+						// Check sentinels in parent directory; don't recurse into cleanable folders
+						if (sentinelsConfirmed(dirPath, rule)) {
+							toSize.push({
 								path: fullPath,
 								projectPath: dirPath,
 								projectType: resolvedProjectType,
 								folderName: entry.name,
-								size,
 								risk: rule.risk,
 								category: rule.category,
 								note: rule.note,
 							});
+							continue;
 						}
-						// Don't recurse into cleanable folders
-						continue;
 					}
-				}
 
-				// Recurse into non-cleanable directories (skip hidden dirs except specific ones)
-				if (!entry.name.startsWith(".") || CLEANABLE_NAMES.has(entry.name)) {
-					await walk(fullPath, depth + 1);
+					// Recurse into non-cleanable directories (skip hidden dirs except specific ones)
+					if (!entry.name.startsWith(".") || CLEANABLE_NAMES.has(entry.name)) recurse.push(fullPath);
 				}
+				return { found, toSize, recurse };
 			}
-		} catch {}
-	}
 
-	await walk(rootPath, 0);
-	items.sort((a, b) => b.size - a.size);
-	const totalSize = items.reduce((s, i) => s + i.size, 0);
-	return { items, totalSize };
+			const detect = Effect.fn("Cleanables.detect")(function* (rootPath: string, options: DetectOptions = {}) {
+				const maxDepth = options.maxDepth ?? 8;
+				const items: CleanableItem[] = [];
+
+				const walk = (dirPath: string, depth: number): Effect.Effect<void> =>
+					Effect.gen(function* () {
+						if (depth > maxDepth) return;
+						if (options.onDir) yield* options.onDir(dirPath);
+						const { found, toSize, recurse } = yield* Effect.sync(() => inspect(dirPath));
+						items.push(...found);
+						for (const pending of toSize) {
+							const size = yield* scanner.dirSize(pending.path);
+							if (size > 0) items.push({ ...pending, size });
+						}
+						for (const sub of recurse) yield* walk(sub, depth + 1);
+					});
+
+				yield* walk(rootPath, 0);
+				items.sort((a, b) => b.size - a.size);
+				return { items, totalSize: items.reduce((s, i) => s + i.size, 0) };
+			});
+
+			return Cleanables.of({ detect });
+		}),
+	);
 }

@@ -1,14 +1,4 @@
-// Core modules log through this indirection: the desktop app keeps console output,
-// the TUI silences it (stdout belongs to the renderer).
-export interface Logger {
-	log: (...args: unknown[]) => void;
-	error: (...args: unknown[]) => void;
-}
+import { Logger } from "effect";
 
-export let logger: Logger = console;
-
-export function setLogger(l: Logger) {
-	logger = l;
-}
-
-export const silentLogger: Logger = { log: () => {}, error: () => {} };
+/** No loggers at all: the TUI owns stdout, so core logging must stay quiet there. */
+export const SilentLogger = Logger.layer([]);

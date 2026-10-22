@@ -1,5 +1,6 @@
-import { readdirSync, statSync } from "fs";
 import { basename, extname, join } from "path";
+import { Context, Effect, FileSystem, Layer, Option } from "effect";
+import { PathNotFound } from "./errors";
 import { expandPath } from "./paths";
 import type { EntryInfo } from "./types";
 
@@ -24,118 +25,130 @@ const TYPE_CATEGORIES: { label: string; extensions: Set<string>; color: string }
 	{ label: "html", extensions: new Set([".html", ".htm", ".hbs", ".ejs", ".pug"]), color: "#e17055" },
 ];
 
-export async function getEntryInfo(entryPath: string): Promise<EntryInfo | null> {
-	try {
-		const resolved = expandPath(entryPath);
-		const stat = statSync(resolved, { throwIfNoEntry: false });
-		if (!stat) return null;
+const PREVIEW_BYTES = 5120;
 
-		const info: EntryInfo = {
-			path: resolved,
-			name: basename(resolved),
-			size: stat.isDirectory() ? 0 : (stat.blocks ?? 0) * 512,
-			isDir: stat.isDirectory(),
-			modifiedAt: stat.mtimeMs,
-			createdAt: stat.birthtimeMs,
-		};
+type Info = FileSystem.File.Info;
+const diskUsage = (info: Info) => Number(Option.getOrElse(info.blocks, () => 0n)) * 512;
+const millis = (date: Option.Option<Date>) => Option.match(date, { onNone: () => 0, onSome: (d) => d.getTime() });
 
-		if (stat.isDirectory()) {
-			// Gather directory stats
-			let fileCount = 0;
-			let dirCount = 0;
-			let largestFile: { name: string; size: number } | undefined;
-			let newestFile: { name: string; modifiedAt: number } | undefined;
-			const extCounts: Record<string, number> = {};
-			let totalFiles = 0;
-			let totalSize = 0;
-
-			try {
-				const items = readdirSync(resolved, { withFileTypes: true });
-				for (const item of items) {
-					if (item.name.startsWith(".")) continue;
-					const fullPath = join(resolved, item.name);
-					try {
-						const itemStat = statSync(fullPath, { throwIfNoEntry: false });
-						if (!itemStat) continue;
-						if (item.isDirectory()) {
-							dirCount++;
-						} else if (item.isFile()) {
-							fileCount++;
-							const fSize = (itemStat.blocks ?? 0) * 512;
-							totalSize += fSize;
-							if (!largestFile || fSize > largestFile.size) {
-								largestFile = { name: item.name, size: fSize };
-							}
-							if (!newestFile || itemStat.mtimeMs > newestFile.modifiedAt) {
-								newestFile = { name: item.name, modifiedAt: itemStat.mtimeMs };
-							}
-							const ext = extname(item.name).toLowerCase();
-							if (ext) {
-								extCounts[ext] = (extCounts[ext] || 0) + 1;
-								totalFiles++;
-							}
-						}
-					} catch {}
-				}
-			} catch {}
-
-			info.size = totalSize;
-			info.fileCount = fileCount;
-			info.dirCount = dirCount;
-			info.largestFile = largestFile;
-			info.newestFile = newestFile;
-
-			// Build type distribution
-			if (totalFiles > 0) {
-				const catCounts: { label: string; count: number; color: string }[] = [];
-				const matched = new Set<string>();
-				for (const cat of TYPE_CATEGORIES) {
-					let count = 0;
-					for (const [ext, c] of Object.entries(extCounts)) {
-						if (cat.extensions.has(ext)) {
-							count += c;
-							matched.add(ext);
-						}
-					}
-					if (count > 0) catCounts.push({ label: cat.label, count, color: cat.color });
-				}
-				// "Other" for unmatched
-				let otherCount = 0;
-				for (const [ext, c] of Object.entries(extCounts)) {
-					if (!matched.has(ext)) otherCount += c;
-				}
-				if (otherCount > 0) catCounts.push({ label: "other", count: otherCount, color: "#dfe6e9" });
-
-				catCounts.sort((a, b) => b.count - a.count);
-				info.typeDistribution = catCounts.map((c) => ({
-					label: c.label,
-					percentage: Math.round((c.count / totalFiles) * 100),
-					color: c.color,
-				}));
-			}
-		} else {
-			// File info
-			const ext = extname(resolved).toLowerCase();
-			info.extension = ext || undefined;
-
-			if (IMAGE_EXTENSIONS.has(ext)) {
-				info.previewType = "image";
-			} else if (TEXT_EXTENSIONS.has(ext) || basename(resolved).toLowerCase() === "makefile" || basename(resolved).toLowerCase() === "dockerfile") {
-				info.previewType = "text";
-				try {
-					// Punto 5: Bun.file() per la text preview
-					const file = Bun.file(resolved);
-					const buf = new Uint8Array(await file.slice(0, 5120).arrayBuffer());
-					info.textPreview = new TextDecoder().decode(buf);
-					if (file.size > 5120) info.textPreview += "\n…";
-				} catch {}
-			} else {
-				info.previewType = "none";
+function typeDistribution(extCounts: Map<string, number>, totalFiles: number): EntryInfo["typeDistribution"] {
+	const catCounts: { label: string; count: number; color: string }[] = [];
+	const matched = new Set<string>();
+	for (const cat of TYPE_CATEGORIES) {
+		let count = 0;
+		for (const [ext, c] of extCounts) {
+			if (cat.extensions.has(ext)) {
+				count += c;
+				matched.add(ext);
 			}
 		}
-
-		return info;
-	} catch {
-		return null;
+		if (count > 0) catCounts.push({ label: cat.label, count, color: cat.color });
 	}
+	// "Other" for unmatched
+	let otherCount = 0;
+	for (const [ext, c] of extCounts) if (!matched.has(ext)) otherCount += c;
+	if (otherCount > 0) catCounts.push({ label: "other", count: otherCount, color: "#dfe6e9" });
+
+	catCounts.sort((a, b) => b.count - a.count);
+	return catCounts.map((c) => ({ label: c.label, percentage: Math.round((c.count / totalFiles) * 100), color: c.color }));
+}
+
+/** Details for the preview / info panel: directory summary or file preview. */
+export class EntryInfoReader extends Context.Service<
+	EntryInfoReader,
+	{
+		get(entryPath: string): Effect.Effect<EntryInfo, PathNotFound>;
+	}
+>()("ingombro/core/EntryInfoReader") {
+	static readonly layer = Layer.effect(
+		EntryInfoReader,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+
+			const directoryInfo = Effect.fnUntraced(function* (resolved: string) {
+				const names = yield* fs.readDirectory(resolved).pipe(Effect.orElseSucceed((): string[] => []));
+				const visible = names.filter((name) => !name.startsWith("."));
+				const stats = yield* Effect.forEach(
+					visible,
+					(name) => fs.stat(join(resolved, name)).pipe(Effect.option, Effect.map((stat) => ({ name, stat }))),
+					{ concurrency: 32 },
+				);
+
+				let fileCount = 0;
+				let dirCount = 0;
+				let totalSize = 0;
+				let totalFiles = 0;
+				let largestFile: { name: string; size: number } | undefined;
+				let newestFile: { name: string; modifiedAt: number } | undefined;
+				const extCounts = new Map<string, number>();
+				for (const { name, stat } of stats) {
+					if (Option.isNone(stat)) continue;
+					if (stat.value.type === "Directory") {
+						dirCount++;
+					} else if (stat.value.type === "File") {
+						fileCount++;
+						const fSize = diskUsage(stat.value);
+						const mtime = millis(stat.value.mtime);
+						totalSize += fSize;
+						if (!largestFile || fSize > largestFile.size) largestFile = { name, size: fSize };
+						if (!newestFile || mtime > newestFile.modifiedAt) newestFile = { name, modifiedAt: mtime };
+						const ext = extname(name).toLowerCase();
+						if (ext) {
+							extCounts.set(ext, (extCounts.get(ext) ?? 0) + 1);
+							totalFiles++;
+						}
+					}
+				}
+				return {
+					size: totalSize,
+					fileCount,
+					dirCount,
+					largestFile,
+					newestFile,
+					typeDistribution: totalFiles > 0 ? typeDistribution(extCounts, totalFiles) : undefined,
+				};
+			});
+
+			const textPreview = (resolved: string, size: number) =>
+				Effect.scoped(
+					Effect.gen(function* () {
+						const file = yield* fs.open(resolved);
+						const bytes = yield* file.readAlloc(PREVIEW_BYTES);
+						const text = Option.match(bytes, { onNone: () => "", onSome: (b) => new TextDecoder().decode(b) });
+						return size > PREVIEW_BYTES ? text + "\n…" : text;
+					}),
+				).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+
+			const get = Effect.fn("EntryInfoReader.get")(function* (entryPath: string) {
+				const resolved = expandPath(entryPath);
+				const stat = yield* fs.stat(resolved).pipe(Effect.mapError(() => new PathNotFound({ path: resolved })));
+				const isDir = stat.type === "Directory";
+				const base: EntryInfo = {
+					path: resolved,
+					name: basename(resolved),
+					size: isDir ? 0 : diskUsage(stat),
+					isDir,
+					modifiedAt: millis(stat.mtime),
+					createdAt: millis(stat.birthtime),
+				};
+
+				if (isDir) return { ...base, ...(yield* directoryInfo(resolved)) };
+
+				const ext = extname(resolved).toLowerCase();
+				const lowerName = basename(resolved).toLowerCase();
+				if (IMAGE_EXTENSIONS.has(ext)) return { ...base, extension: ext || undefined, previewType: "image" as const };
+				if (TEXT_EXTENSIONS.has(ext) || lowerName === "makefile" || lowerName === "dockerfile") {
+					return {
+						...base,
+						extension: ext || undefined,
+						previewType: "text" as const,
+						textPreview: yield* textPreview(resolved, Number(stat.size)),
+					};
+				}
+				return { ...base, extension: ext || undefined, previewType: "none" as const };
+			});
+
+			return EntryInfoReader.of({ get });
+		}),
+	);
 }

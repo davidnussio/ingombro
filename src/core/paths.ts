@@ -1,6 +1,6 @@
-import { mkdirSync } from "fs";
-import { join, resolve } from "path";
 import { homedir } from "os";
+import { join, resolve } from "path";
+import { Config, Context, Effect, FileSystem, Layer } from "effect";
 
 /** Resolve `~`, make absolute and strip the trailing slash (except for "/"). */
 export function expandPath(p: string): string {
@@ -20,9 +20,43 @@ export function prettyPath(p: string): string {
 	return p;
 }
 
-/** Data directory, overridable for tests with INGOMBRO_HOME. */
-export const APP_DIR = process.env.INGOMBRO_HOME || join(homedir(), ".ingombro");
+/** Location of Ingombro's data files (shared by desktop app and TUI). */
+export class AppPaths extends Context.Service<
+	AppPaths,
+	{
+		readonly appDir: string;
+		readonly settingsFile: string;
+		readonly cacheFile: string;
+		readonly statsFile: string;
+		/** Older cache locations, migrated once into `cacheFile`. */
+		readonly legacyCacheFiles: ReadonlyArray<string>;
+		/** mkdir -p the data directory. */
+		readonly ensureAppDir: Effect.Effect<void>;
+	}
+>()("ingombro/core/AppPaths") {
+	static readonly make = Effect.fnUntraced(function* (appDir: string) {
+		const fs = yield* FileSystem.FileSystem;
+		return AppPaths.of({
+			appDir,
+			settingsFile: join(appDir, "settings.json"),
+			cacheFile: join(appDir, "cache.json.gz"),
+			statsFile: join(appDir, "stats.json"),
+			legacyCacheFiles: [join(homedir(), ".diskscanner_cache.json"), join(appDir, "cache.json")],
+			ensureAppDir: fs.makeDirectory(appDir, { recursive: true }).pipe(Effect.ignore),
+		});
+	});
 
-export function ensureAppDir() {
-	mkdirSync(APP_DIR, { recursive: true });
+	/** `~/.ingombro`, overridable with INGOMBRO_HOME (used by tests). */
+	static readonly layer = Layer.effect(
+		AppPaths,
+		Effect.gen(function* () {
+			const appDir = yield* Config.String("INGOMBRO_HOME").pipe(
+				Config.withDefault(join(homedir(), ".ingombro")),
+				Effect.orDie,
+			);
+			return yield* AppPaths.make(appDir);
+		}),
+	);
+
+	static readonly layerAt = (appDir: string) => Layer.effect(AppPaths, AppPaths.make(appDir));
 }

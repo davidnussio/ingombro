@@ -1,171 +1,221 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
-import { basename, join } from "path";
 import { homedir } from "os";
-import { $ } from "bun";
+import { basename, join } from "path";
+import { Context, Effect, FileSystem, Layer } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { CacheStore } from "./cache";
+import { CommandError, DeleteError, EnvsecError, PathNotFound, causeMessage } from "./errors";
 import { expandPath } from "./paths";
-import { loadSettings } from "./settings";
-import { loadCacheStore, removeDirFromCacheEntry, saveCacheStore } from "./cache";
-import { getPathSize } from "./scanner";
-import { logger } from "./log";
-import type { AppSettings } from "./types";
+import { Scanner } from "./scanner";
+import { Settings } from "./settings";
+import type { DeleteMode } from "./types";
 
-/** Pick a name that doesn't clash inside `dir`. */
-function uniqueTarget(dir: string, name: string): string {
-	let target = join(dir, name);
-	for (let i = 2; existsSync(target); i++) target = join(dir, `${name} ${i}`);
-	return target;
-}
+// ─── Trash ──────────────────────────────────────────────────────────────────
 
 /**
  * Move to the Trash. macOS: Finder first (keeps "Put Back"), then a plain move into ~/.Trash.
- * Linux: freedesktop Trash. Never falls back to a permanent delete: if nothing works it throws.
+ * Linux: freedesktop Trash. Never falls back to a permanent delete: if nothing works it fails.
  */
-async function moveToTrash(resolved: string) {
-	if (process.platform === "darwin") {
-		try {
-			const escaped = resolved.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-			await $`osascript -e ${`tell application "Finder" to delete POSIX file "${escaped}"`}`.quiet();
-			return;
-		} catch {}
-		const trashDir = join(homedir(), ".Trash");
-		renameSync(resolved, uniqueTarget(trashDir, basename(resolved)));
-		return;
+export class Trash extends Context.Service<
+	Trash,
+	{
+		moveToTrash(resolved: string): Effect.Effect<void, DeleteError>;
 	}
-	const trashRoot = join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "Trash");
-	const filesDir = join(trashRoot, "files");
-	const infoDir = join(trashRoot, "info");
-	mkdirSync(filesDir, { recursive: true });
-	mkdirSync(infoDir, { recursive: true });
-	const target = uniqueTarget(filesDir, basename(resolved));
-	renameSync(resolved, target);
-	const deletionDate = new Date().toISOString().slice(0, 19);
-	writeFileSync(join(infoDir, basename(target) + ".trashinfo"), `[Trash Info]\nPath=${encodeURI(resolved)}\nDeletionDate=${deletionDate}\n`);
+>()("ingombro/core/Trash") {
+	static readonly layer = Layer.effect(
+		Trash,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+			/** Pick a name that doesn't clash inside `dir`. */
+			const uniqueTarget = Effect.fnUntraced(function* (dir: string, name: string) {
+				let target = join(dir, name);
+				for (let i = 2; yield* fs.exists(target); i++) target = join(dir, `${name} ${i}`);
+				return target;
+			});
+
+			const viaFinder = (resolved: string) => {
+				const escaped = resolved.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+				return spawner
+					.exitCode(ChildProcess.make("osascript", ["-e", `tell application "Finder" to delete POSIX file "${escaped}"`]))
+					.pipe(Effect.filterOrFail((code) => code === 0));
+			};
+
+			const darwin = (resolved: string) =>
+				viaFinder(resolved).pipe(
+					Effect.catch(() =>
+						Effect.gen(function* () {
+							const target = yield* uniqueTarget(join(homedir(), ".Trash"), basename(resolved));
+							yield* fs.rename(resolved, target);
+						}),
+					),
+				);
+
+			const freedesktop = Effect.fnUntraced(function* (resolved: string) {
+				const trashRoot = join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "Trash");
+				const filesDir = join(trashRoot, "files");
+				const infoDir = join(trashRoot, "info");
+				yield* fs.makeDirectory(filesDir, { recursive: true });
+				yield* fs.makeDirectory(infoDir, { recursive: true });
+				const target = yield* uniqueTarget(filesDir, basename(resolved));
+				yield* fs.rename(resolved, target);
+				const deletionDate = new Date().toISOString().slice(0, 19);
+				yield* fs.writeFileString(
+					join(infoDir, basename(target) + ".trashinfo"),
+					`[Trash Info]\nPath=${encodeURI(resolved)}\nDeletionDate=${deletionDate}\n`,
+				);
+			});
+
+			const moveToTrash = (resolved: string) =>
+				(process.platform === "darwin" ? darwin(resolved) : freedesktop(resolved)).pipe(
+					Effect.mapError((cause) => new DeleteError({ path: resolved, cause })),
+					Effect.withSpan("Trash.moveToTrash"),
+				);
+
+			return Trash.of({ moveToTrash });
+		}),
+	);
 }
 
-export async function removePath(resolved: string, mode: AppSettings["deleteMode"]) {
-	if (mode === "trash") await moveToTrash(resolved);
-	else rmSync(resolved, { recursive: true, force: true });
-}
+// ─── File actions ───────────────────────────────────────────────────────────
 
 export interface BatchDeleteResult {
-	success: boolean;
-	deletedCount: number;
-	deletedSize: number;
-	deletedPaths: string[];
-	errors: string[];
+	readonly success: boolean;
+	readonly deletedCount: number;
+	readonly deletedSize: number;
+	readonly deletedPaths: ReadonlyArray<string>;
+	readonly errors: ReadonlyArray<string>;
 }
 
-/**
- * Delete paths (trash or permanent per settings) and prune them from every cached tree.
- * `knownSizes` avoids re-walking directories whose size the caller already knows.
- */
-export async function batchDelete(
-	paths: string[],
-	opts: { knownSizes?: Map<string, number>; onItem?: (path: string, index: number) => void } = {},
-): Promise<BatchDeleteResult> {
-	const settings = await loadSettings();
-	const store = await loadCacheStore();
-	let deletedCount = 0;
-	let deletedSize = 0;
-	const deletedPaths: string[] = [];
-	const errors: string[] = [];
-	let cacheModified = false;
+export interface BatchDeleteOptions {
+	/** Avoids re-walking directories whose size the caller already knows. */
+	readonly knownSizes?: ReadonlyMap<string, number>;
+	readonly onItem?: (path: string, index: number) => Effect.Effect<void>;
+}
 
-	for (const [i, p] of paths.entries()) {
-		opts.onItem?.(p, i);
-		try {
-			const resolved = expandPath(p);
-			if (!statSync(resolved, { throwIfNoEntry: false })) {
-				errors.push(`${p}: not found`);
-				continue;
-			}
-			const size = opts.knownSizes?.get(p) ?? getPathSize(resolved);
-			await removePath(resolved, settings.deleteMode);
-			deletedCount++;
-			deletedSize += size;
-			deletedPaths.push(resolved);
-			for (const cacheEntry of store.entries) {
-				if (removeDirFromCacheEntry(cacheEntry, resolved)) cacheModified = true;
-			}
-		} catch (e: any) {
-			errors.push(`${p}: ${e.message}`);
-		}
+export class FileActions extends Context.Service<
+	FileActions,
+	{
+		remove(resolved: string, mode: DeleteMode): Effect.Effect<void, DeleteError>;
+		/** Delete paths (trash or permanent per settings) and prune them from every cached tree. */
+		batchDelete(paths: ReadonlyArray<string>, options?: BatchDeleteOptions): Effect.Effect<BatchDeleteResult>;
+		/** Directory suggestions for path autocomplete (max 20, "~"-prefixed when under home). */
+		listDirSuggestions(partial: string): Effect.Effect<ReadonlyArray<string>>;
+		isDirectory(path: string): Effect.Effect<boolean>;
+		/** Reveal in Finder (file) or open (directory). macOS: `open`, Linux: `xdg-open`. */
+		reveal(path: string): Effect.Effect<void, PathNotFound | CommandError>;
 	}
+>()("ingombro/core/FileActions") {
+	static readonly layer = Layer.effect(
+		FileActions,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+			const trash = yield* Trash;
+			const settings = yield* Settings;
+			const cache = yield* CacheStore;
+			const scanner = yield* Scanner;
 
-	if (cacheModified) await saveCacheStore(store);
-	return { success: errors.length === 0, deletedCount, deletedSize, deletedPaths, errors };
+			const isDirectory = (path: string) =>
+				fs.stat(expandPath(path)).pipe(
+					Effect.map((info) => info.type === "Directory"),
+					Effect.orElseSucceed(() => false),
+				);
+
+			const remove = (resolved: string, mode: DeleteMode) =>
+				mode === "trash"
+					? trash.moveToTrash(resolved)
+					: fs
+							.remove(resolved, { recursive: true, force: true })
+							.pipe(Effect.mapError((cause) => new DeleteError({ path: resolved, cause })));
+
+			const batchDelete = Effect.fn("FileActions.batchDelete")(function* (
+				paths: ReadonlyArray<string>,
+				options: BatchDeleteOptions = {},
+			) {
+				const { deleteMode } = yield* settings.get;
+				let deletedSize = 0;
+				const deletedPaths: string[] = [];
+				const errors: string[] = [];
+
+				for (const [i, p] of paths.entries()) {
+					if (options.onItem) yield* options.onItem(p, i);
+					const resolved = expandPath(p);
+					const outcome = yield* Effect.gen(function* () {
+						if (!(yield* fs.exists(resolved).pipe(Effect.orElseSucceed(() => false)))) {
+							return yield* new PathNotFound({ path: p });
+						}
+						const size = options.knownSizes?.get(p) ?? (yield* scanner.pathSize(resolved));
+						yield* remove(resolved, deleteMode);
+						return size;
+					}).pipe(Effect.result);
+					if (outcome._tag === "Success") {
+						deletedSize += outcome.success;
+						deletedPaths.push(resolved);
+					} else {
+						errors.push(outcome.failure._tag === "PathNotFound" ? outcome.failure.message : `${p}: ${outcome.failure.message}`);
+					}
+				}
+
+				if (deletedPaths.length > 0) yield* cache.pruneDeleted(deletedPaths);
+				return {
+					success: errors.length === 0,
+					deletedCount: deletedPaths.length,
+					deletedSize,
+					deletedPaths,
+					errors,
+				};
+			});
+
+			const listDirSuggestions = (partial: string) =>
+				Effect.gen(function* () {
+					const input = partial || "~";
+					const expanded = expandPath(input);
+					let dirToList = expanded;
+					let prefix = "";
+					if (!input.endsWith("/") && !(yield* isDirectory(expanded))) {
+						dirToList = join(expanded, "..");
+						prefix = basename(expanded).toLowerCase();
+					}
+					if (!(yield* isDirectory(dirToList))) return [];
+
+					const home = homedir();
+					const names = (yield* fs.readDirectory(dirToList))
+						.filter((name) => !name.startsWith(".") && (!prefix || name.toLowerCase().startsWith(prefix)))
+						.sort();
+					const suggestions: string[] = [];
+					for (const name of names) {
+						const fullPath = join(dirToList, name);
+						if (!(yield* isDirectory(fullPath))) continue;
+						suggestions.push(fullPath.startsWith(home) ? "~" + fullPath.slice(home.length) : fullPath);
+						if (suggestions.length >= 20) break;
+					}
+					return suggestions.sort();
+				}).pipe(
+					Effect.catch((e) => Effect.logError("[ingombro] listDir error:", e).pipe(Effect.as([]))),
+					Effect.withSpan("FileActions.listDirSuggestions"),
+				);
+
+			const reveal = Effect.fn("FileActions.reveal")(function* (path: string) {
+				const resolved = expandPath(path);
+				const info = yield* fs.stat(resolved).pipe(Effect.mapError(() => new PathNotFound({ path: resolved })));
+				const isDir = info.type === "Directory";
+				const command =
+					process.platform === "darwin"
+						? ChildProcess.make("open", isDir ? [resolved] : ["-R", resolved])
+						: ChildProcess.make("xdg-open", [isDir ? resolved : join(resolved, "..")]);
+				yield* spawner.exitCode(command).pipe(
+					Effect.filterOrFail((code) => code === 0),
+					Effect.mapError((cause) => new CommandError({ command: command.command, cause })),
+				);
+			});
+
+			return FileActions.of({ remove, batchDelete, listDirSuggestions, isDirectory, reveal });
+		}),
+	);
 }
 
-/** Directory suggestions for path autocomplete (max 20, "~"-prefixed when under home). */
-export function listDirSuggestions(partial: string): string[] {
-	try {
-		const input = partial || "~";
-		const expanded = expandPath(input);
-		let dirToList: string;
-		let prefix = "";
-		const isExactDir = statSync(expanded, { throwIfNoEntry: false })?.isDirectory();
-		if (input.endsWith("/") || isExactDir) {
-			dirToList = expanded;
-		} else {
-			dirToList = join(expanded, "..");
-			prefix = basename(expanded).toLowerCase();
-		}
-		if (!statSync(dirToList, { throwIfNoEntry: false })?.isDirectory()) return [];
-
-		const home = homedir();
-		const suggestions: string[] = [];
-		for (const item of readdirSync(dirToList, { withFileTypes: true })) {
-			if (!item.isDirectory() || item.name.startsWith(".")) continue;
-			if (prefix && !item.name.toLowerCase().startsWith(prefix)) continue;
-			const fullPath = join(dirToList, item.name);
-			suggestions.push(fullPath.startsWith(home) ? "~" + fullPath.slice(home.length) : fullPath);
-			if (suggestions.length >= 20) break;
-		}
-		return suggestions.sort();
-	} catch (e) {
-		logger.error("[ingombro] listDir error:", e);
-		return [];
-	}
-}
-
-export function isDirectory(p: string): boolean {
-	try {
-		return !!statSync(expandPath(p), { throwIfNoEntry: false })?.isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-/** Reveal in Finder (file) or open (directory). macOS: `open`, Linux: `xdg-open`. */
-export async function revealInFinder(filePath: string): Promise<boolean> {
-	try {
-		const resolved = expandPath(filePath);
-		const stat = statSync(resolved, { throwIfNoEntry: false });
-		if (!stat) return false;
-		if (process.platform === "darwin") {
-			if (stat.isDirectory()) await $`open ${resolved}`.quiet();
-			else await $`open -R ${resolved}`.quiet();
-		} else {
-			await $`xdg-open ${stat.isDirectory() ? resolved : join(resolved, "..")}`.quiet();
-		}
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-// --- envsec integration ---
-
-export async function isEnvsecAvailable(): Promise<boolean> {
-	try {
-		const { EnvsecClient } = await import("@envsec/sdk");
-		const client = await EnvsecClient.create({ context: "__envsec_check__" });
-		await client.close();
-		return true;
-	} catch {
-		return false;
-	}
-}
+// ─── envsec integration ─────────────────────────────────────────────────────
 
 export function parseEnvFile(content: string): [string, string][] {
 	const entries: [string, string][] = [];
@@ -184,33 +234,72 @@ export function parseEnvFile(content: string): [string, string][] {
 	return entries;
 }
 
-/** Import a .env file into an envsec context, then delete the file and prune the cache. */
-export async function importEnvToEnvsec(filePath: string, context: string): Promise<{ success: boolean; imported: number; error?: string }> {
-	try {
-		const resolved = expandPath(filePath);
-		const entries = parseEnvFile(readFileSync(resolved, "utf-8"));
-		if (entries.length === 0) return { success: false, imported: 0, error: "No valid entries found in file" };
+type EnvsecClient = Awaited<ReturnType<(typeof import("@envsec/sdk"))["EnvsecClient"]["create"]>>;
 
-		const { EnvsecClient } = await import("@envsec/sdk");
-		const client = await EnvsecClient.create({ context });
-		let imported = 0;
-		for (const [key, value] of entries) {
-			await client.set(key, value);
-			imported++;
-		}
-		await client.close();
-
-		rmSync(resolved, { force: true });
-		const store = await loadCacheStore();
-		let cacheModified = false;
-		for (const cacheEntry of store.entries) {
-			if (removeDirFromCacheEntry(cacheEntry, resolved)) cacheModified = true;
-		}
-		if (cacheModified) await saveCacheStore(store);
-		logger.log(`[envsec] Imported ${imported} secrets from ${resolved} to context "${context}"`);
-		return { success: true, imported };
-	} catch (e: any) {
-		logger.error("[envsec] Import error:", e);
-		return { success: false, imported: 0, error: e.message };
+/** Moves secrets out of .env files into the envsec keychain store. */
+export class Envsec extends Context.Service<
+	Envsec,
+	{
+		readonly isAvailable: Effect.Effect<boolean>;
+		/** Import a .env file into an envsec context, then delete the file and prune the cache. Returns the count. */
+		importEnvFile(filePath: string, context: string): Effect.Effect<number, EnvsecError>;
 	}
+>()("ingombro/core/Envsec") {
+	static readonly layer = Layer.effect(
+		Envsec,
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			const cache = yield* CacheStore;
+
+			// The SDK is loaded lazily: it pulls in native keychain bindings.
+			const client = (context: string) =>
+				Effect.acquireRelease(
+					Effect.tryPromise({
+						try: async () => (await import("@envsec/sdk")).EnvsecClient.create({ context }),
+						catch: (cause) => new EnvsecError({ reason: "envsec unavailable", cause }),
+					}),
+					(c: EnvsecClient) => Effect.promise(() => c.close()).pipe(Effect.ignore),
+				);
+
+			const isAvailable = Effect.scoped(client("__envsec_check__")).pipe(
+				Effect.as(true),
+				Effect.orElseSucceed(() => false),
+				Effect.withSpan("Envsec.isAvailable"),
+			);
+
+			const importEnvFile = Effect.fn("Envsec.importEnvFile")(
+				function* (filePath: string, context: string) {
+					const resolved = expandPath(filePath);
+					const content = yield* fs
+						.readFileString(resolved)
+						.pipe(Effect.mapError((cause) => new EnvsecError({ reason: "Cannot read file", cause })));
+					const entries = parseEnvFile(content);
+					if (entries.length === 0) return yield* new EnvsecError({ reason: "No valid entries found in file" });
+
+					const imported = yield* Effect.scoped(
+						Effect.gen(function* () {
+							const c = yield* client(context);
+							for (const [key, value] of entries) {
+								yield* Effect.tryPromise({
+									try: () => c.set(key, value),
+									catch: (cause) => new EnvsecError({ reason: `Cannot store ${key}`, cause }),
+								});
+							}
+							return entries.length;
+						}),
+					);
+
+					yield* fs
+						.remove(resolved, { force: true })
+						.pipe(Effect.mapError((cause) => new EnvsecError({ reason: "Cannot delete file", cause })));
+					yield* cache.pruneDeleted([resolved]);
+					yield* Effect.log(`[envsec] Imported ${imported} secrets from ${resolved} to context "${context}"`);
+					return imported;
+				},
+				Effect.tapError((e) => Effect.logError("[envsec] Import error:", causeMessage(e))),
+			);
+
+			return Envsec.of({ isAvailable, importEnvFile });
+		}),
+	);
 }

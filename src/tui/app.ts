@@ -1,40 +1,31 @@
 import { dirname } from "path";
 import { BoxRenderable, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { Cause, Context, Effect, Fiber, Option, Schedule } from "effect";
 import {
 	type AppSettings,
 	type CacheEntry,
-	type CancelToken,
+	type CacheListItem,
 	type Category,
 	type CleanableItem,
+	type CoreServices,
 	type DirEntry,
 	type EntryInfo,
 	type ScanProgress,
-	ScanCancelledError,
-	batchDelete,
-	deleteCacheEntry,
-	detectCleanables,
+	CacheStore,
+	Cleanables,
+	EntryInfoReader,
+	FileActions,
+	Scanner,
+	Settings,
+	Stats,
 	expandPath,
-	findCacheEntry,
 	findNode,
 	formatAgo,
 	formatDate,
 	formatSize,
-	getEntryInfo,
-	getStats,
-	isDirectory,
 	listCacheEntries,
-	listDirSuggestions,
-	loadCacheStore,
-	loadSettings,
 	prettyPath,
-	recordDeletion,
 	removeDirFromCacheEntry,
-	revealInFinder,
-	saveCacheStore,
-	saveSettings,
-	scanDirectory,
-	throttledProgress,
-	upsertCacheEntry,
 } from "../core";
 import { T, fmt } from "./i18n";
 import { barColor, theme } from "./theme";
@@ -67,19 +58,21 @@ interface ListState {
 
 type Modal =
 	| { kind: "confirm"; title: string; lines: Line[]; onYes: () => void }
-	| { kind: "prompt"; title: string; value: string; cycle: string[] | null; cycleIdx: number }
+	| {
+			kind: "prompt";
+			title: string;
+			value: string;
+			cycle: ReadonlyArray<string> | null;
+			cycleIdx: number;
+			/** Directory completions for `value`, refreshed in the background. */
+			suggestions: ReadonlyArray<string>;
+	  }
 	| { kind: "help" };
 
 interface Toast {
 	text: string;
 	color: string;
 	until: number;
-}
-
-interface ScanList {
-	rootPath: string;
-	timestamp: number;
-	size: number;
 }
 
 export interface AppOptions {
@@ -106,7 +99,7 @@ export class App {
 	entry: CacheEntry | null = null;
 	cwd = "";
 	settings!: AppSettings;
-	scans: ScanList[] = [];
+	scans: CacheListItem[] = [];
 	freed30 = 0;
 	sortBy: "size" | "name" = "size";
 	lists: Record<"scans" | "clean" | "files", ListState> = {
@@ -122,21 +115,28 @@ export class App {
 	filterEditing: "scans" | "clean" | "files" | null = null;
 	modal: Modal | null = null;
 	toast: Toast | null = null;
-	scanning: { path: string; progress: ScanProgress; cancel: CancelToken; started: number } | null = null;
-	detecting: { cancel: CancelToken; current: string } | null = null;
+	scanning: { id: number; path: string; progress: ScanProgress; fiber: Fiber.Fiber<unknown> | null; started: number } | null = null;
+	detecting: { id: number; current: string; fiber: Fiber.Fiber<unknown> | null } | null = null;
+	/** Identifies the latest scan / detection so stale fibers don't touch the state. */
+	private taskSeq = 0;
 	busy: string | null = null;
 	infoCache = new Map<string, EntryInfo | null>();
-	private infoTimer: ReturnType<typeof setTimeout> | null = null;
-	private ticker: ReturnType<typeof setInterval> | null = null;
+	private infoFiber: Fiber.Fiber<unknown> | null = null;
+	private suggestFiber: Fiber.Fiber<unknown> | null = null;
+	private ticker: Fiber.Fiber<unknown> | null = null;
+	/** Runs an effect on the core services; key handlers and timers go through here. */
+	private readonly fork: <A, E>(effect: Effect.Effect<A, E, CoreServices>) => Fiber.Fiber<A, E>;
 	private frame = 0;
 	private lastInfoKey = "";
 	private exiting = false;
 
 	constructor(
 		renderer: CliRenderer,
+		services: Context.Context<CoreServices>,
 		private opts: AppOptions = {},
 	) {
 		this.r = renderer;
+		this.fork = Effect.runForkWith(services);
 		for (const id of PANELS) {
 			const box = new BoxRenderable(renderer, {
 				id: `panel-${id}`,
@@ -174,28 +174,33 @@ export class App {
 		renderer.on("resize", () => this.render());
 	}
 
-	async start() {
-		this.settings = await loadSettings();
-		await this.refreshScans();
+	/** Builds the UI on the services of the calling effect. */
+	static make(renderer: CliRenderer, opts: AppOptions = {}) {
+		return Effect.context<CoreServices>().pipe(Effect.map((services) => new App(renderer, services, opts)));
+	}
+
+	readonly start = Effect.gen({ self: this }, function* () {
+		this.settings = yield* Settings.use((s) => s.get);
+		yield* this.refreshScans;
 		this.render();
 
 		const p = this.opts.initialPath;
 		if (p) {
 			const resolved = expandPath(p);
-			if (!isDirectory(resolved)) {
+			if (!(yield* FileActions.use((a) => a.isDirectory(resolved)))) {
 				this.notify(fmt(T.notDir, { path: p }), theme.err);
 			} else if (!this.opts.rescan && this.scans.some((s) => s.rootPath === resolved)) {
-				await this.loadScan(resolved);
+				yield* this.loadScan(resolved);
 			} else {
-				void this.startScan(resolved);
+				this.startScan(resolved);
 			}
 		} else if (this.scans[0]) {
-			await this.loadScan(this.scans[0].rootPath);
+			yield* this.loadScan(this.scans[0].rootPath);
 		} else {
 			this.openScanPrompt();
 		}
 		this.render();
-	}
+	});
 
 	// ─── Data helpers ──────────────────────────────────────────────────────
 
@@ -204,7 +209,7 @@ export class App {
 		return findNode(this.entry.tree, this.cwd) ?? this.entry.tree;
 	}
 
-	fileRows(): DirEntry[] {
+	fileRows(): ReadonlyArray<DirEntry> {
 		const node = this.cwdNode;
 		if (!node?.children) return [];
 		let rows = node.children;
@@ -216,7 +221,7 @@ export class App {
 		return rows;
 	}
 
-	cleanRows(): CleanableItem[] {
+	cleanRows(): ReadonlyArray<CleanableItem> {
 		const all = this.entry?.cleanables?.items ?? [];
 		const scope = this.cwd;
 		const f = this.lists.clean.filter.toLowerCase();
@@ -228,15 +233,15 @@ export class App {
 		);
 	}
 
-	scanRows(): ScanList[] {
+	scanRows(): ReadonlyArray<CacheListItem> {
 		const f = this.lists.scans.filter.toLowerCase();
 		return f ? this.scans.filter((s) => s.rootPath.toLowerCase().includes(f)) : this.scans;
 	}
 
-	private async refreshScans() {
-		this.scans = listCacheEntries(await loadCacheStore());
-		this.freed30 = (await getStats(30)).totalFreed;
-	}
+	private readonly refreshScans = Effect.gen({ self: this }, function* () {
+		this.scans = listCacheEntries(yield* CacheStore.use((c) => c.load));
+		this.freed30 = (yield* Stats.use((s) => s.summary(30))).totalFreed;
+	});
 
 	private rowCount(id: "scans" | "clean" | "files"): number {
 		return id === "files" ? this.fileRows().length : id === "clean" ? this.cleanRows().length : this.scanRows().length;
@@ -244,60 +249,86 @@ export class App {
 
 	// ─── Actions ───────────────────────────────────────────────────────────
 
+	private interrupt(fiber: Fiber.Fiber<unknown> | null | undefined) {
+		if (fiber) this.fork(Fiber.interrupt(fiber));
+	}
+
 	notify(text: string, color: string = theme.ok, ms = 4000) {
 		this.toast = { text, color, until: Date.now() + ms };
 		this.render();
-		setTimeout(() => this.render(), ms + 50);
+		// Repaint once the toast has expired
+		this.fork(Effect.sleep(ms + 50).pipe(Effect.andThen(Effect.sync(() => this.render()))));
 	}
 
+	/** Spinner / progress repaint while something runs in the background. */
 	private startTicker() {
 		if (this.ticker) return;
-		this.ticker = setInterval(() => {
-			this.frame++;
-			if (!this.scanning && !this.detecting && !this.busy) {
-				clearInterval(this.ticker!);
-				this.ticker = null;
-			}
-			this.render();
-		}, 100);
+		this.ticker = this.fork(
+			Effect.sync(() => {
+				this.frame++;
+				this.render();
+				return !this.scanning && !this.detecting && !this.busy;
+			}).pipe(
+				Effect.repeat({ schedule: Schedule.spaced("100 millis"), until: (idle) => idle }),
+				Effect.ensuring(Effect.sync(() => (this.ticker = null))),
+			),
+		);
 	}
 
-	async startScan(path: string) {
-		const resolved = expandPath(path);
-		if (!isDirectory(resolved)) {
-			this.notify(fmt(T.notDir, { path }), theme.err);
-			return;
-		}
-		if (this.scanning) this.scanning.cancel.cancelled = true;
-		if (this.detecting) this.detecting.cancel.cancelled = true;
-		const cancel: CancelToken = { cancelled: false };
-		this.scanning = { path: resolved, progress: { dirs: 0, files: 0, currentDir: resolved }, cancel, started: Date.now() };
-		this.focus = "files";
-		this.startTicker();
-		this.render();
-		try {
-			const { tree } = await scanDirectory(resolved, {
-				maxDepth: this.settings.maxDepth,
-				cancel,
-				onProgress: throttledProgress((p) => {
-					if (this.scanning) this.scanning.progress = { ...p };
-				}, 80),
-			});
+	startScan(path: string) {
+		this.fork(
+			Effect.gen({ self: this }, function* () {
+				const resolved = expandPath(path);
+				if (!(yield* FileActions.use((a) => a.isDirectory(resolved)))) {
+					this.notify(fmt(T.notDir, { path }), theme.err);
+					return;
+				}
+				this.interrupt(this.scanning?.fiber);
+				this.interrupt(this.detecting?.fiber);
+				const id = ++this.taskSeq;
+				const progress = { dirs: 0, files: 0, currentDir: resolved };
+				this.scanning = { id, path: resolved, progress, fiber: null, started: Date.now() };
+				this.focus = "files";
+				this.startTicker();
+				this.render();
+				this.scanning.fiber = this.fork(this.scanTask(id, resolved));
+			}),
+		);
+	}
+
+	private scanTask(id: number, resolved: string) {
+		const current = () => this.scanning?.id === id;
+		return Effect.gen({ self: this }, function* () {
+			const { tree } = yield* Scanner.use((s) =>
+				s.scan(resolved, {
+					maxDepth: this.settings.maxDepth,
+					progressIntervalMs: 80,
+					onProgress: (p) => Effect.sync(() => current() && (this.scanning!.progress = p)),
+				}),
+			);
 			const elapsed = (Date.now() - (this.scanning?.started ?? Date.now())) / 1000;
 			const entry: CacheEntry = { timestamp: Date.now(), rootPath: resolved, tree };
-			const store = await loadCacheStore();
-			await saveCacheStore(await upsertCacheEntry(store, entry));
+			yield* CacheStore.use((c) => c.upsert(entry));
 			this.scanning = null;
 			this.setEntry(entry);
-			await this.refreshScans();
+			yield* this.refreshScans;
 			this.lists.scans.cursor = Math.max(0, this.scans.findIndex((s) => s.rootPath === resolved));
 			this.notify(fmt(T.scanDone, { size: formatSize(tree.size), time: `${elapsed.toFixed(1)}s` }));
-			void this.runDetect();
-		} catch (e) {
-			if (this.scanning?.cancel === cancel) this.scanning = null;
-			if (e instanceof ScanCancelledError) this.notify(T.scanCancelled, theme.warn);
-			else this.notify(String((e as Error).message ?? e), theme.err);
-		}
+			this.runDetect();
+		}).pipe(
+			Effect.onInterrupt(() =>
+				Effect.sync(() => {
+					if (current()) this.scanning = null;
+					if (!this.exiting) this.notify(T.scanCancelled, theme.warn);
+				}),
+			),
+			Effect.catchCause((cause) =>
+				Effect.sync(() => {
+					if (current()) this.scanning = null;
+					this.notify(Cause.pretty(cause), theme.err);
+				}),
+			),
+		);
 	}
 
 	private setEntry(entry: CacheEntry) {
@@ -311,38 +342,36 @@ export class App {
 		this.infoCache.clear();
 	}
 
-	async loadScan(rootPath: string) {
-		const entry = findCacheEntry(await loadCacheStore(), rootPath);
-		if (!entry) return;
-		this.setEntry(entry);
-		this.lists.scans.cursor = Math.max(0, this.scans.findIndex((s) => s.rootPath === rootPath));
-		this.render();
-		if (!entry.cleanables) void this.runDetect();
+	loadScan(rootPath: string) {
+		return Effect.gen({ self: this }, function* () {
+			const entry = yield* CacheStore.use((c) => c.findEntry(rootPath));
+			if (Option.isNone(entry)) return;
+			this.setEntry(entry.value);
+			this.lists.scans.cursor = Math.max(0, this.scans.findIndex((s) => s.rootPath === rootPath));
+			this.render();
+			if (!entry.value.cleanables) this.runDetect();
+		});
 	}
 
-	async runDetect() {
+	runDetect() {
 		const entry = this.entry;
 		if (!entry) return;
-		if (this.detecting) this.detecting.cancel.cancelled = true;
-		const cancel: CancelToken = { cancelled: false };
-		this.detecting = { cancel, current: entry.rootPath };
+		this.interrupt(this.detecting?.fiber);
+		const id = ++this.taskSeq;
+		const current = () => this.detecting?.id === id;
+		this.detecting = { id, current: entry.rootPath, fiber: null };
 		this.startTicker();
-		const result = await detectCleanables(entry.rootPath, {
-			cancel,
-			onDir: (d) => {
-				if (this.detecting?.cancel === cancel) this.detecting.current = d;
-			},
-		});
-		if (cancel.cancelled) return;
-		this.detecting = null;
-		entry.cleanables = result;
-		const store = await loadCacheStore();
-		const stored = findCacheEntry(store, entry.rootPath);
-		if (stored) {
-			stored.cleanables = result;
-			await saveCacheStore(store);
-		}
-		this.render();
+		this.detecting.fiber = this.fork(
+			Effect.gen({ self: this }, function* () {
+				const result = yield* Cleanables.use((c) =>
+					c.detect(entry.rootPath, { onDir: (d) => Effect.sync(() => current() && (this.detecting!.current = d)) }),
+				);
+				this.detecting = null;
+				if (this.entry?.rootPath === entry.rootPath) this.entry = { ...this.entry, cleanables: result };
+				yield* CacheStore.use((c) => c.setCleanables(entry.rootPath, result));
+				this.render();
+			}).pipe(Effect.onInterrupt(() => Effect.sync(() => current() && (this.detecting = null)))),
+		);
 	}
 
 	private enterDir(node: DirEntry) {
@@ -399,47 +428,79 @@ export class App {
 			lines.push([], [[`  ⚠ ${T.highRisk}`, { fg: theme.err, bold: true }]]);
 		}
 		lines.push([], [[T.yesNo, { fg: theme.dim }]]);
-		this.modal = { kind: "confirm", title: T.confirmTitle, lines, onYes: () => void this.doDelete(targets) };
+		this.modal = { kind: "confirm", title: T.confirmTitle, lines, onYes: () => void this.fork(this.doDelete(targets)) };
 		this.render();
 	}
 
-	private async doDelete(targets: { path: string; size: number }[]) {
-		const entry = this.entry;
-		this.busy = `0/${targets.length}`;
-		this.startTicker();
-		const knownSizes = new Map(targets.map((t) => [t.path, t.size]));
-		const res = await batchDelete(
-			targets.map((t) => t.path),
-			{ knownSizes, onItem: (_, i) => (this.busy = `${i + 1}/${targets.length}`) },
+	private doDelete(targets: { path: string; size: number }[]) {
+		return Effect.gen({ self: this }, function* () {
+			this.busy = `0/${targets.length}`;
+			this.startTicker();
+			const knownSizes = new Map(targets.map((t) => [t.path, t.size]));
+			const res = yield* FileActions.use((a) =>
+				a.batchDelete(
+					targets.map((t) => t.path),
+					{ knownSizes, onItem: (_, i) => Effect.sync(() => (this.busy = `${i + 1}/${targets.length}`)) },
+				),
+			);
+			this.busy = null;
+			for (const p of res.deletedPaths) {
+				if (this.entry) this.entry = removeDirFromCacheEntry(this.entry, p) ?? this.entry;
+				this.marked.delete(p);
+				this.cleanSelected.delete(p);
+				this.infoCache.delete(p);
+			}
+			if (res.deletedCount > 0) yield* Stats.use((s) => s.recordDeletion(res.deletedSize, res.deletedCount));
+			yield* this.refreshScans;
+			if (res.errors.length) {
+				this.notify(fmt(T.deleteErrors, { n: res.errors.length, first: res.errors[0]! }), theme.err, 6000);
+			} else {
+				this.notify(fmt(T.deleted, { size: formatSize(res.deletedSize), n: res.deletedCount }));
+			}
+		});
+	}
+
+	private reveal(path: string) {
+		this.fork(
+			FileActions.use((a) => a.reveal(path)).pipe(
+				Effect.andThen(Effect.sync(() => this.notify(T.revealed))),
+				Effect.ignore,
+			),
 		);
-		this.busy = null;
-		if (entry) for (const p of res.deletedPaths) removeDirFromCacheEntry(entry, p);
-		for (const p of res.deletedPaths) {
-			this.marked.delete(p);
-			this.cleanSelected.delete(p);
-			this.infoCache.delete(p);
-		}
-		if (res.deletedCount > 0) await recordDeletion(res.deletedSize, res.deletedCount);
-		await this.refreshScans();
-		if (res.errors.length) {
-			this.notify(fmt(T.deleteErrors, { n: res.errors.length, first: res.errors[0]! }), theme.err, 6000);
-		} else {
-			this.notify(fmt(T.deleted, { size: formatSize(res.deletedSize), n: res.deletedCount }));
-		}
 	}
 
 	openScanPrompt(initial?: string) {
 		const start = initial ?? (this.entry ? prettyPath(this.cwd) + "/" : "~/");
-		this.modal = { kind: "prompt", title: T.promptScan, value: start, cycle: null, cycleIdx: -1 };
+		this.modal = { kind: "prompt", title: T.promptScan, value: start, cycle: null, cycleIdx: -1, suggestions: [] };
+		this.refreshSuggestions();
 		this.render();
 	}
 
-	async quit() {
+	/** Recompute completions for the prompt's current value (latest keystroke wins). */
+	private refreshSuggestions() {
+		const m = this.modal;
+		if (m?.kind !== "prompt") return;
+		this.interrupt(this.suggestFiber);
+		const value = m.value;
+		this.suggestFiber = this.fork(
+			FileActions.use((a) => a.listDirSuggestions(value)).pipe(
+				Effect.tap((suggestions) =>
+					Effect.sync(() => {
+						if (this.modal?.kind !== "prompt" || this.modal.value !== value) return;
+						this.modal.suggestions = suggestions;
+						this.render();
+					}),
+				),
+			),
+		);
+	}
+
+	quit() {
 		if (this.exiting) return;
 		this.exiting = true;
-		if (this.scanning) this.scanning.cancel.cancelled = true;
-		if (this.detecting) this.detecting.cancel.cancelled = true;
-		if (this.ticker) clearInterval(this.ticker);
+		for (const fiber of [this.scanning?.fiber, this.detecting?.fiber, this.ticker, this.infoFiber, this.suggestFiber]) {
+			this.interrupt(fiber);
+		}
 		this.r.destroy();
 		this.opts.onExit?.();
 	}
@@ -460,6 +521,7 @@ export class App {
 		if (this.modal?.kind === "prompt") {
 			this.modal.value += clean;
 			this.modal.cycle = null;
+			this.refreshSuggestions();
 		} else if (this.filterEditing) {
 			this.lists[this.filterEditing].filter += clean;
 			this.lists[this.filterEditing].cursor = 0;
@@ -509,7 +571,7 @@ export class App {
 		if (key === "return") {
 			const value = m.value.trim();
 			this.modal = null;
-			if (value) void this.startScan(value);
+			if (value) this.startScan(value);
 			return;
 		}
 		if (key === "tab") {
@@ -518,24 +580,37 @@ export class App {
 				m.value = m.cycle[m.cycleIdx]!;
 				return;
 			}
-			const sugg = listDirSuggestions(m.value);
-			if (sugg.length === 1) {
-				m.value = sugg[0]! + "/";
-			} else if (sugg.length > 1) {
-				const lcp = commonPrefix(sugg);
-				if (lcp.length > m.value.length && !m.value.endsWith("/")) m.value = lcp;
-				else {
-					m.cycle = sugg;
-					m.cycleIdx = 0;
-					m.value = sugg[0]!;
-				}
-			}
+			// Complete against fresh suggestions for exactly what was typed
+			const typed = m.value;
+			this.fork(
+				FileActions.use((a) => a.listDirSuggestions(typed)).pipe(
+					Effect.tap((sugg) =>
+						Effect.sync(() => {
+							if (this.modal !== m || m.value !== typed) return;
+							if (sugg.length === 1) {
+								m.value = sugg[0]! + "/";
+							} else if (sugg.length > 1) {
+								const lcp = commonPrefix(sugg);
+								if (lcp.length > m.value.length && !m.value.endsWith("/")) m.value = lcp;
+								else {
+									m.cycle = sugg;
+									m.cycleIdx = 0;
+									m.value = sugg[0]!;
+								}
+							}
+							if (!m.cycle) this.refreshSuggestions();
+							this.render();
+						}),
+					),
+				),
+			);
 			return;
 		}
 		const next = this.editText(m.value, key);
 		if (next !== null) {
 			m.value = next;
 			m.cycle = null;
+			this.refreshSuggestions();
 		}
 	}
 
@@ -601,11 +676,11 @@ export class App {
 				return;
 			case "m":
 				this.settings = { ...this.settings, deleteMode: this.settings.deleteMode === "trash" ? "permanent" : "trash" };
-				void saveSettings(this.settings);
+				this.fork(Settings.use((s) => s.save(this.settings)));
 				this.notify(fmt(T.modeNow, { mode: this.settings.deleteMode === "trash" ? T.modeTrash : T.modePermanent }), this.settings.deleteMode === "trash" ? theme.ok : theme.err);
 				return;
 			case "escape":
-				if (this.scanning) this.scanning.cancel.cancelled = true;
+				if (this.scanning) this.interrupt(this.scanning.fiber);
 				else if (this.focus !== "info" && this.lists[this.focus].filter) {
 					this.lists[this.focus].filter = "";
 					this.lists[this.focus].cursor = 0;
@@ -694,10 +769,10 @@ export class App {
 			}
 			case "e":
 			case "o":
-				if (cur) void revealInFinder(cur.path).then((ok) => ok && this.notify(T.revealed));
+				if (cur) this.reveal(cur.path);
 				return;
 			case "r":
-				if (this.entry) void this.startScan(this.entry.rootPath);
+				if (this.entry) this.startScan(this.entry.rootPath);
 				return;
 		}
 	}
@@ -738,10 +813,10 @@ export class App {
 				return;
 			case "e":
 			case "o":
-				if (cur) void revealInFinder(cur.path).then((ok) => ok && this.notify(T.revealed));
+				if (cur) this.reveal(cur.path);
 				return;
 			case "r":
-				void this.runDetect();
+				this.runDetect();
 				return;
 		}
 	}
@@ -753,24 +828,33 @@ export class App {
 			case "return":
 			case "space":
 				if (cur) {
-					void this.loadScan(cur.rootPath).then(() => {
-						this.focus = "files";
-						this.render();
-					});
+					this.fork(
+						this.loadScan(cur.rootPath).pipe(
+							Effect.andThen(
+								Effect.sync(() => {
+									this.focus = "files";
+									this.render();
+								}),
+							),
+						),
+					);
 				}
 				return;
 			case "r":
-				if (cur) void this.startScan(cur.rootPath);
+				if (cur) this.startScan(cur.rootPath);
 				return;
 			case "d":
 			case "delete":
 				if (!cur) return;
-				void deleteCacheEntry(cur.rootPath).then(async () => {
-					if (this.entry?.rootPath === cur.rootPath) this.entry = null;
-					await this.refreshScans();
-					this.lists.scans.cursor = Math.min(this.lists.scans.cursor, Math.max(0, this.scans.length - 1));
-					this.notify(T.cacheRemoved);
-				});
+				this.fork(
+					Effect.gen({ self: this }, function* () {
+						yield* CacheStore.use((c) => c.remove(cur.rootPath));
+						if (this.entry?.rootPath === cur.rootPath) this.entry = null;
+						yield* this.refreshScans;
+						this.lists.scans.cursor = Math.min(this.lists.scans.cursor, Math.max(0, this.scans.length - 1));
+						this.notify(T.cacheRemoved);
+					}),
+				);
 				return;
 		}
 	}
@@ -1006,13 +1090,17 @@ export class App {
 		this.lastInfoKey = p;
 		this.infoScroll = 0;
 		if (!p || this.infoCache.has(p)) return;
-		if (this.infoTimer) clearTimeout(this.infoTimer);
-		this.infoTimer = setTimeout(async () => {
-			const info = await getEntryInfo(p);
-			if (this.infoCache.size > 300) this.infoCache.delete(this.infoCache.keys().next().value!);
-			this.infoCache.set(p, info);
-			if (this.lastInfoKey === p) this.render();
-		}, 60);
+		// Debounce: moving the cursor again interrupts the pending load
+		this.interrupt(this.infoFiber);
+		this.infoFiber = this.fork(
+			Effect.gen({ self: this }, function* () {
+				yield* Effect.sleep("60 millis");
+				const info = yield* EntryInfoReader.use((r) => r.get(p)).pipe(Effect.option);
+				if (this.infoCache.size > 300) this.infoCache.delete(this.infoCache.keys().next().value!);
+				this.infoCache.set(p, Option.getOrNull(info));
+				if (this.lastInfoKey === p) this.render();
+			}),
+		);
 	}
 
 	private renderInfo(w: number, h: number) {
@@ -1171,7 +1259,7 @@ export class App {
 			lines = m.lines;
 		} else {
 			title = T.promptScan;
-			const sugg = m.cycle ?? listDirSuggestions(m.value);
+			const sugg = m.cycle ?? m.suggestions;
 			lines.push([[`› `, { fg: theme.borderFocus, bold: true }], [truncateLeft(m.value, w - 6), { fg: theme.text, bold: true }], ["▏", { fg: theme.borderFocus }]]);
 			lines.push([]);
 			for (const [i, s] of sugg.slice(0, 10).entries()) {
@@ -1212,7 +1300,7 @@ function relPath(p: string, base: string): string {
 	return p.startsWith(base + "/") ? p.slice(base.length + 1) : prettyPath(p);
 }
 
-function commonPrefix(list: string[]): string {
+function commonPrefix(list: ReadonlyArray<string>): string {
 	if (!list.length) return "";
 	let prefix = list[0]!;
 	for (const s of list) while (!s.startsWith(prefix)) prefix = prefix.slice(0, -1);

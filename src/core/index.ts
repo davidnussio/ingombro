@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./errors";
 export * from "./paths";
 export * from "./log";
 export * from "./settings";
@@ -9,3 +10,4 @@ export * from "./cleanables";
 export * from "./entry-info";
 export * from "./actions";
 export * from "./format";
+export * from "./layer";

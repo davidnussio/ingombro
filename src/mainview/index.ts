@@ -1,4 +1,5 @@
 import Electrobun, { Electroview } from "electrobun/view";
+import { Context, Duration, Effect, FiberMap, Layer, ManagedRuntime, Predicate, Schema } from "effect";
 import { initI18n, t, setLanguage, getLanguage, getLocale, getAvailableLanguages } from "./i18n";
 
 // Initialize i18n before anything else
@@ -90,6 +91,122 @@ type AppRPC = {
 	};
 };
 
+// --- Backend service (Effect wrapper around the Electroview RPC client) ---
+type BunRequests = AppRPC["bun"]["requests"];
+type RequestName = keyof BunRequests;
+type RequestParams<K extends RequestName> = BunRequests[K]["params"];
+type RequestResponse<K extends RequestName> = BunRequests[K]["response"];
+
+/** The subset of the Electroview RPC object the Backend layer needs. */
+type RpcClient = {
+	readonly request: { readonly [K in RequestName]: (params: RequestParams<K>) => Promise<RequestResponse<K>> };
+};
+
+/** An RPC request to the Bun process rejected (transport error, timeout, handler crash). */
+class BackendError extends Schema.TaggedError<BackendError>()("BackendError", {
+	request: Schema.String,
+	cause: Schema.Defect(),
+}) {
+	override get message() {
+		const cause = Predicate.hasProperty(this.cause, "message") ? String(this.cause.message) : String(this.cause);
+		return `${this.request}: ${cause}`;
+	}
+}
+
+class Backend extends Context.Service<
+	Backend,
+	{ readonly [K in RequestName]: (params: RequestParams<K>) => Effect.Effect<RequestResponse<K>, BackendError> }
+>()("ingombro/mainview/Backend") {
+	static readonly layer = (client: RpcClient) => {
+		const request =
+			<K extends RequestName>(name: K) =>
+			(params: RequestParams<K>): Effect.Effect<RequestResponse<K>, BackendError> =>
+				Effect.tryPromise({
+					try: () => client.request[name](params),
+					catch: (cause) => new BackendError({ request: name, cause }),
+				}).pipe(Effect.withSpan(`Backend.${name}`));
+
+		return Layer.succeed(
+			Backend,
+			Backend.of({
+				scanDirectory: request("scanDirectory"),
+				getChildren: request("getChildren"),
+				deleteEntry: request("deleteEntry"),
+				getCacheList: request("getCacheList"),
+				deleteCacheEntry: request("deleteCacheEntry"),
+				listDir: request("listDir"),
+				validatePath: request("validatePath"),
+				getSettings: request("getSettings"),
+				saveSettings: request("saveSettings"),
+				detectCleanables: request("detectCleanables"),
+				getCachedCleanables: request("getCachedCleanables"),
+				saveCachedCleanables: request("saveCachedCleanables"),
+				batchDelete: request("batchDelete"),
+				getEntryInfo: request("getEntryInfo"),
+				cancelScan: request("cancelScan"),
+				getStats: request("getStats"),
+				recordDeletion: request("recordDeletion"),
+				revealInFinder: request("revealInFinder"),
+				checkEnvsecAvailable: request("checkEnvsecAvailable"),
+				importEnvToEnvsec: request("importEnvToEnvsec"),
+				checkForUpdate: request("checkForUpdate"),
+				downloadUpdate: request("downloadUpdate"),
+				applyUpdate: request("applyUpdate"),
+				getAppVersion: request("getAppVersion"),
+				getWindowPosition: request("getWindowPosition"),
+				moveWindow: request("moveWindow"),
+			}),
+		);
+	};
+}
+
+// --- UI task slots ---
+// Each slot holds at most one running fiber: running a new effect in a slot
+// interrupts the previous one. A `sleep` at the start of the effect turns a
+// slot into a debounce; a stale in-flight request is dropped the same way.
+type UiTask = "autocomplete" | "validatePath" | "autocompleteHide" | "saveSettings" | "toast" | "infoPanel" | "stats";
+
+class UiTasks extends Context.Service<
+	UiTasks,
+	{ run<R>(task: UiTask, effect: Effect.Effect<void, never, R>): Effect.Effect<void, never, R> }
+>()("ingombro/mainview/UiTasks") {
+	static readonly layer = Layer.effect(
+		UiTasks,
+		Effect.gen(function* () {
+			const fibers = yield* FiberMap.make<UiTask, void, never>();
+			return UiTasks.of({
+				run: (task, effect) => Effect.asVoid(FiberMap.run(fibers, task, effect)),
+			});
+		}),
+	);
+}
+
+type MainviewServices = Backend | UiTasks;
+
+/** Run `effect` in a UI task slot, interrupting whatever was running there. */
+const inSlot = <R>(task: UiTask, effect: Effect.Effect<void, never, R>) => UiTasks.use((tasks) => tasks.run(task, effect));
+
+/** Run `effect` in a UI task slot after `delay`; a new call before then restarts the wait. */
+const debounced = <R>(task: UiTask, delay: Duration.Input, effect: Effect.Effect<void, never, R>) =>
+	inSlot(task, Effect.andThen(Effect.sleep(delay), effect));
+
+/**
+ * Start `effect` without waiting for it (the equivalent of calling an async
+ * function without `await`). It starts synchronously, so RPC requests keep the
+ * same order as before, and outlives the fiber that started it.
+ */
+const background = <A, R>(effect: Effect.Effect<A, never, R>) =>
+	Effect.asVoid(Effect.forkDetach(effect, { startImmediately: true }));
+
+/** Swallow a failure after logging it (for fire-and-forget requests). */
+const logFailure =
+	(label: string) =>
+	<A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<void, never, R> =>
+		self.pipe(
+			Effect.asVoid,
+			Effect.catch((error) => Effect.logError(label, error)),
+		);
+
 const rpc = Electroview.defineRPC<AppRPC>({
 	maxRequestTime: 300000,
 	handlers: {
@@ -106,28 +223,31 @@ const rpc = Electroview.defineRPC<AppRPC>({
 					}
 				}
 			},
-			error: ({ message }) => {
-				console.error(`[fe] error received: ${message}`);
-				alert(t().errorPrefix + " " + message);
-				showScreen("welcome");
-			},
-			updateAvailable: ({ version }) => {
-				console.log(`[fe] Update available: ${version}`);
-				showUpdateBanner(version);
-			},
-			updateReady: ({ version }) => {
-				console.log(`[fe] Update ready: ${version}`);
-				showUpdateReadyBanner(version);
-			},
-			updateError: ({ message }) => {
-				console.error(`[fe] Update error: ${message}`);
-				hideUpdateBanner();
-			},
+			error: ({ message }) => run(onBackendErrorMessage(message)),
+			updateAvailable: ({ version }) =>
+				run(Effect.log(`[fe] Update available: ${version}`).pipe(Effect.andThen(Effect.sync(() => showUpdateBanner(version))))),
+			updateReady: ({ version }) =>
+				run(Effect.log(`[fe] Update ready: ${version}`).pipe(Effect.andThen(Effect.sync(() => showUpdateReadyBanner(version))))),
+			updateError: ({ message }) =>
+				run(Effect.logError(`[fe] Update error: ${message}`).pipe(Effect.andThen(Effect.sync(() => hideUpdateBanner())))),
 		},
 	},
 });
 
 const electrobun = new Electrobun.Electroview({ rpc });
+
+// --- Runtime: every DOM / RPC callback runs its effect through here ---
+const runtime = ManagedRuntime.make(Layer.mergeAll(Backend.layer(rpc), UiTasks.layer));
+
+function run<A>(effect: Effect.Effect<A, never, MainviewServices>): void {
+	runtime.runFork(effect);
+}
+
+const onBackendErrorMessage = Effect.fn("onBackendErrorMessage")(function* (message: string) {
+	yield* Effect.logError(`[fe] error received: ${message}`);
+	alert(t().errorPrefix + " " + message);
+	yield* showScreen("welcome");
+});
 
 // --- Titlebar drag (manual implementation for WebKit) ---
 {
@@ -138,7 +258,23 @@ const electrobun = new Electrobun.Electroview({ rpc });
 	let winStartX = 0;
 	let winStartY = 0;
 
-	titlebar.addEventListener("mousedown", async (e: MouseEvent) => {
+	const startDrag = Effect.fn("startDrag")(function* (e: MouseEvent) {
+		const backend = yield* Backend;
+		yield* backend.getWindowPosition({}).pipe(
+			Effect.tap((pos) =>
+				Effect.sync(() => {
+					if (pos) {
+						winStartX = pos.x;
+						winStartY = pos.y;
+					}
+				}),
+			),
+			Effect.ignore,
+		);
+		e.preventDefault();
+	});
+
+	titlebar.addEventListener("mousedown", (e: MouseEvent) => {
 		// Ignore clicks on interactive children (buttons, inputs, etc.)
 		if ((e.target as HTMLElement).closest("button, input, select, a, [data-no-drag]")) return;
 		if (e.button !== 0) return;
@@ -146,21 +282,14 @@ const electrobun = new Electrobun.Electroview({ rpc });
 		isDragging = true;
 		dragStartX = e.screenX;
 		dragStartY = e.screenY;
-		try {
-			const pos = await electrobun.rpc?.request?.getWindowPosition({});
-			if (pos) {
-				winStartX = pos.x;
-				winStartY = pos.y;
-			}
-		} catch {}
-		e.preventDefault();
+		run(startDrag(e));
 	});
 
 	window.addEventListener("mousemove", (e: MouseEvent) => {
 		if (!isDragging) return;
 		const dx = e.screenX - dragStartX;
 		const dy = e.screenY - dragStartY;
-		electrobun.rpc?.request?.moveWindow({ x: winStartX + dx, y: winStartY + dy });
+		run(Backend.use((backend) => backend.moveWindow({ x: winStartX + dx, y: winStartY + dy })).pipe(logFailure("[fe] moveWindow error:")));
 	});
 
 	window.addEventListener("mouseup", () => {
@@ -174,7 +303,6 @@ let navigationStack: DirEntry[] = [];
 let pendingDeletePath: string | null = null;
 let pendingDeleteSize: number = 0;
 let totalFreedBytes: number = 0;
-let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 let currentCleanables: CleanableResult | null = null;
 let cleanableSelected: Set<string> = new Set();
 let activeCleanFilters: Set<string> = new Set(); // empty = show all (no filter)
@@ -195,12 +323,12 @@ function showUpdateBanner(version: string) {
 		<button id="updateDownloadBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateDownload ?? "Download"}</button>
 		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
 	`;
-	document.getElementById("updateDownloadBtn")!.onclick = async () => {
+	document.getElementById("updateDownloadBtn")!.onclick = () => {
 		const btn = document.getElementById("updateDownloadBtn") as HTMLButtonElement;
 		btn.textContent = t().updateDownloading ?? "Downloading…";
 		btn.disabled = true;
 		btn.style.opacity = "0.6";
-		await rpc.request.downloadUpdate({});
+		run(Backend.use((backend) => backend.downloadUpdate({})).pipe(logFailure("[fe] downloadUpdate error:")));
 	};
 	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
 }
@@ -218,8 +346,8 @@ function showUpdateReadyBanner(version: string) {
 		<button id="updateApplyBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateInstall ?? "Restart & Update"}</button>
 		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
 	`;
-	document.getElementById("updateApplyBtn")!.onclick = async () => {
-		await rpc.request.applyUpdate({});
+	document.getElementById("updateApplyBtn")!.onclick = () => {
+		run(Backend.use((backend) => backend.applyUpdate({})).pipe(logFailure("[fe] applyUpdate error:")));
 	};
 	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
 }
@@ -253,60 +381,67 @@ function updateCleanBanner() {
 }
 
 // --- Cancel scan ---
-async function cancelScan() {
-	if (!isScanning) return;
-	console.log("[fe] cancelScan requested");
-	try {
-		await electrobun.rpc?.request?.cancelScan({});
-	} catch (e) {
-		console.error("[fe] cancelScan error:", e);
-	}
-}
+const cancelScan = Effect.fn("cancelScan")(
+	function* () {
+		if (!isScanning) return;
+		yield* Effect.log("[fe] cancelScan requested");
+		const backend = yield* Backend;
+		yield* backend.cancelScan({});
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] cancelScan error:", e.cause)),
+);
 
 // --- Clean shutdown: cancel any active scan before closing ---
 window.addEventListener("beforeunload", () => {
 	if (isScanning) {
-		cancelScan();
+		run(cancelScan());
 	}
 });
 
+// Back to the welcome screen and refresh the cached-scans list.
+const goToWelcome = Effect.fnUntraced(function* () {
+	yield* showScreen("welcome");
+	yield* background(renderCacheList());
+});
+
 // --- Scan helper ---
-async function startScan(dirPath: string) {
-	showScreen("scanning");
-	isScanning = true;
-	console.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
-	try {
-		const result = await electrobun.rpc?.request?.scanDirectory({ dirPath });
-		console.log(`[fe] startScan: response received`, result);
+const startScan = Effect.fn("startScan")(
+	function* (dirPath: string) {
+		yield* showScreen("scanning");
+		isScanning = true;
+		yield* Effect.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
+		const backend = yield* Backend;
+		const result = yield* backend.scanDirectory({ dirPath });
+		yield* Effect.log(`[fe] startScan: response received`, result);
 		isScanning = false;
 		if (!result || !result.success || !result.rootPath) {
 			if (result?.error === "SCAN_CANCELLED") {
-				showScreen("welcome");
-				renderCacheList();
+				yield* goToWelcome();
 				return;
 			}
 			alert(t().errorPrefix + " " + (result?.error || t().scanFailed));
-			showScreen("welcome");
-			renderCacheList();
+			yield* goToWelcome();
 			return;
 		}
-		await loadTreeFromCache(result.rootPath, false);
-		detectAndShowCleanables(result.rootPath, false);
-	} catch (e) {
-		console.error(`[fe] startScan error:`, e);
-		isScanning = false;
-		showScreen("welcome");
-		renderCacheList();
-	}
-}
+		yield* loadTreeFromCache(result.rootPath, false);
+		yield* background(detectAndShowCleanables(result.rootPath, false));
+	},
+	Effect.catchTag("BackendError", (e) =>
+		Effect.gen(function* () {
+			yield* Effect.logError(`[fe] startScan error:`, e.cause);
+			isScanning = false;
+			yield* goToWelcome();
+		}),
+	),
+);
 
-async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
-	console.log(`[fe] loadTreeFromCache: rootPath="${rootPath}" preserveNav=${preserveNav}`);
-	const res = await electrobun.rpc?.request?.getChildren({ dirPath: rootPath });
+const loadTreeFromCache = Effect.fn("loadTreeFromCache")(function* (rootPath: string, preserveNav: boolean) {
+	yield* Effect.log(`[fe] loadTreeFromCache: rootPath="${rootPath}" preserveNav=${preserveNav}`);
+	const backend = yield* Backend;
+	const res = yield* backend.getChildren({ dirPath: rootPath });
 	if (!res || !res.children || res.children.length === 0) {
-		console.log(`[fe] loadTreeFromCache: no children`);
-		showScreen("welcome");
-		renderCacheList();
+		yield* Effect.log(`[fe] loadTreeFromCache: no children`);
+		yield* goToWelcome();
 		return;
 	}
 	const tree: DirEntry = {
@@ -335,17 +470,17 @@ async function loadTreeFromCache(rootPath: string, preserveNav: boolean) {
 	} else {
 		currentTree = tree;
 		navigationStack = [tree];
-		showScreen("results");
+		yield* showScreen("results");
 		renderResults(tree);
 	}
-}
+});
 
 // --- DOM ---
 const $ = (id: string) => document.getElementById(id)!;
 const scanPathInput = $("scanPath") as HTMLInputElement;
 
 // --- Screens ---
-function showScreen(name: "welcome" | "scanning" | "results") {
+const showScreen = Effect.fnUntraced(function* (name: "welcome" | "scanning" | "results") {
 	document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
 	$(`screen-${name}`).classList.add("active");
 	const settings = $("settingsSection");
@@ -354,7 +489,7 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 		$("settingsTab").classList.remove("hidden");
 		$("cleanBanner").classList.add("hidden");
 		currentCleanables = null;
-		renderStatsWidget();
+		yield* inSlot("stats", renderStatsWidget());
 	} else {
 		settings.classList.add("hidden");
 		settings.classList.remove("settings-open");
@@ -362,7 +497,7 @@ function showScreen(name: "welcome" | "scanning" | "results") {
 		$("settingsTab").classList.remove("settings-tab-hidden");
 		$("settingsOverlayBackdrop").classList.remove("visible");
 	}
-}
+});
 
 // --- Format size ---
 function formatSize(bytes: number): string {
@@ -650,27 +785,32 @@ treemapCanvas.addEventListener("mouseleave", () => {
 	tooltip.classList.add("hidden");
 });
 
-treemapCanvas.addEventListener("click", async (e) => {
+// Drill down into a directory, loading its children first if they are not cached yet.
+const navigateInto = Effect.fn("navigateInto")(
+	function* (entry: DirEntry) {
+		if (!entry.children || entry.children.length === 0) {
+			const backend = yield* Backend;
+			const res = yield* backend.getChildren({ dirPath: entry.path });
+			if (res && res.children && res.children.length > 0) {
+				entry.children = res.children;
+				entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
+			} else {
+				return;
+			}
+		}
+		navigationStack.push(entry);
+		renderResults(entry);
+	},
+	Effect.catchTag("BackendError", () => Effect.void),
+);
+
+treemapCanvas.addEventListener("click", (e) => {
 	const rect = treemapCanvas.getBoundingClientRect();
 	const mx = e.clientX - rect.left;
 	const my = e.clientY - rect.top;
 	const hit = treemapRects.find((r) => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h);
 	if (hit && hit.entry.isDir) {
-		if (!hit.entry.children || hit.entry.children.length === 0) {
-			try {
-				const res = await electrobun.rpc?.request?.getChildren({ dirPath: hit.entry.path });
-				if (res && res.children && res.children.length > 0) {
-					hit.entry.children = res.children;
-					hit.entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
-				} else {
-					return;
-				}
-			} catch {
-				return;
-			}
-		}
-		navigationStack.push(hit.entry);
-		renderResults(hit.entry);
+		run(navigateInto(hit.entry));
 	}
 });
 
@@ -740,23 +880,9 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 		`;
 
 		if (entry.isDir) {
-			item.addEventListener("click", async (e) => {
+			item.addEventListener("click", (e) => {
 				if ((e.target as HTMLElement).classList.contains("btn-delete")) return;
-				if (!entry.children || entry.children.length === 0) {
-					try {
-						const res = await electrobun.rpc?.request?.getChildren({ dirPath: entry.path });
-						if (res && res.children && res.children.length > 0) {
-							entry.children = res.children;
-							entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
-						} else {
-							return;
-						}
-					} catch {
-						return;
-					}
-				}
-				navigationStack.push(entry);
-				renderResults(entry);
+				run(navigateInto(entry));
 			});
 			item.style.cursor = "pointer";
 		}
@@ -787,7 +913,7 @@ function renderDirList(entries: DirEntry[], parentSize: number) {
 			e.stopPropagation();
 			const el = e.currentTarget as HTMLElement;
 			const path = el.dataset.path;
-			if (path) openInfoPanel(path);
+			if (path) run(inSlot("infoPanel", openInfoPanel(path)));
 		});
 	});
 }
@@ -801,17 +927,19 @@ function escapeAttr(s: string): string {
 }
 
 // --- Smart Clean ---
-async function detectAndShowCleanables(rootPath: string, useCache: boolean = true) {
-	const banner = $("cleanBanner");
-	banner.classList.remove("hidden");
-	banner.classList.add("clean-banner-scanning");
-	$("cleanBannerMsg").textContent = t().cleanAnalyzing;
-	$("btnOpenClean").classList.add("hidden");
+const detectAndShowCleanables = Effect.fn("detectAndShowCleanables")(
+	function* (rootPath: string, useCache: boolean = true) {
+		const banner = $("cleanBanner");
+		banner.classList.remove("hidden");
+		banner.classList.add("clean-banner-scanning");
+		$("cleanBannerMsg").textContent = t().cleanAnalyzing;
+		$("btnOpenClean").classList.add("hidden");
 
-	try {
+		const backend = yield* Backend;
+
 		// Try cached cleanables first (only when opening from cache, not after a new scan)
 		if (useCache) {
-			const cached = await electrobun.rpc?.request?.getCachedCleanables({ rootPath });
+			const cached = yield* backend.getCachedCleanables({ rootPath });
 			if (cached?.found && cached.cleanables && cached.cleanables.items.length > 0) {
 				currentCleanables = cached.cleanables;
 				cleanableSelected = new Set(cached.cleanables.items.map((i) => i.path));
@@ -823,12 +951,12 @@ async function detectAndShowCleanables(rootPath: string, useCache: boolean = tru
 			}
 		}
 
-		const result = await electrobun.rpc?.request?.detectCleanables({ rootPath });
+		const result = yield* backend.detectCleanables({ rootPath });
 		if (!result || result.items.length === 0) {
 			banner.classList.add("hidden");
 			currentCleanables = null;
 			// Save empty result to cache so we don't re-scan next time
-			await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: { items: [], totalSize: 0 } });
+			yield* backend.saveCachedCleanables({ rootPath, cleanables: { items: [], totalSize: 0 } });
 			return;
 		}
 		currentCleanables = result;
@@ -838,15 +966,28 @@ async function detectAndShowCleanables(rootPath: string, useCache: boolean = tru
 		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), count);
 		$("btnOpenClean").classList.remove("hidden");
 		// Save to cache for next time
-		await electrobun.rpc?.request?.saveCachedCleanables({ rootPath, cleanables: result });
-	} catch (e) {
-		console.error("[cleanables] detection error:", e);
-		banner.classList.add("hidden");
-		currentCleanables = null;
-	}
-}
+		yield* backend.saveCachedCleanables({ rootPath, cleanables: result });
+	},
+	Effect.catchTag("BackendError", (e) =>
+		Effect.gen(function* () {
+			yield* Effect.logError("[cleanables] detection error:", e.cause);
+			$("cleanBanner").classList.add("hidden");
+			currentCleanables = null;
+		}),
+	),
+);
 
-function openCleanModal() {
+const checkEnvsecAvailable = Effect.fn("checkEnvsecAvailable")(
+	function* () {
+		const backend = yield* Backend;
+		const res = yield* backend.checkEnvsecAvailable({});
+		envsecAvailable = res?.available ?? false;
+		renderCleanList(); // re-render with updated button states
+	},
+	logFailure("[cleanables] checkEnvsecAvailable error:"),
+);
+
+const openCleanModal = Effect.fn("openCleanModal")(function* () {
 	const scoped = getScopedCleanables();
 	if (!scoped || scoped.items.length === 0) return;
 	const modal = $("modal-clean");
@@ -859,10 +1000,7 @@ function openCleanModal() {
 	// Check envsec availability (async, updates buttons after)
 	const hasEnvFiles = scoped.items.some((i) => i.category === "secrets" && i.folderName.startsWith(".env"));
 	if (hasEnvFiles && envsecAvailable === null) {
-		electrobun.rpc?.request?.checkEnvsecAvailable({}).then((res) => {
-			envsecAvailable = res?.available ?? false;
-			renderCleanList(); // re-render with updated button states
-		});
+		yield* background(checkEnvsecAvailable());
 	}
 
 	// Hide envsec form if open from previous session
@@ -874,7 +1012,7 @@ function openCleanModal() {
 	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
 	updateCleanSelection();
 	modal.classList.remove("hidden");
-}
+});
 
 function buildCleanFilters() {
 	const container = $("cleanFilters");
@@ -1025,7 +1163,7 @@ function renderCleanList() {
 		revealBtn.addEventListener("click", (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			electrobun.rpc?.request?.revealInFinder({ filePath: item.path });
+			run(Backend.use((backend) => backend.revealInFinder({ filePath: item.path })).pipe(logFailure("[cleanables] revealInFinder error:")));
 		});
 		const envsecBtn = row.querySelector(".btn-envsec");
 		if (envsecBtn && !envsecBtn.hasAttribute("disabled")) {
@@ -1089,7 +1227,13 @@ function closeEnvsecImportForm() {
 	pendingEnvsecSize = 0;
 }
 
-async function confirmEnvsecImport() {
+// Record freed space in the stats history (not awaited, like before).
+const recordDeletion = (freedBytes: number, deleteCount: number) =>
+	background(
+		Backend.use((backend) => backend.recordDeletion({ freedBytes, deleteCount })).pipe(logFailure("[fe] recordDeletion error:")),
+	);
+
+const confirmEnvsecImport = Effect.fn("confirmEnvsecImport")(function* () {
 	if (!pendingEnvsecPath) return;
 	const context = ($("envsecContextInput") as HTMLInputElement).value.trim();
 	if (!context) return;
@@ -1098,34 +1242,38 @@ async function confirmEnvsecImport() {
 	const confirmBtn = $("btnEnvsecConfirm") as HTMLButtonElement;
 	confirmBtn.disabled = true;
 	$("btnEnvsecConfirmText").textContent = t().envsecImporting;
-	try {
-		const result = await electrobun.rpc?.request?.importEnvToEnvsec({ filePath, context });
+	yield* Effect.gen(function* () {
+		const backend = yield* Backend;
+		const result = yield* backend.importEnvToEnvsec({ filePath, context });
 		if (result?.success) {
 			closeEnvsecImportForm();
-			showFreedToast(fileSize);
+			yield* showFreedToast(fileSize);
 			totalFreedBytes += fileSize;
-			electrobun.rpc?.request?.recordDeletion({ freedBytes: fileSize, deleteCount: 1 });
+			yield* recordDeletion(fileSize, 1);
 			// Refresh the view
 			if (currentTree) {
-				await loadTreeFromCache(currentTree.path, true);
-				detectAndShowCleanables(currentTree.path, false);
+				yield* loadTreeFromCache(currentTree.path, true);
+				yield* background(detectAndShowCleanables(currentTree.path, false));
 			}
 			$("modal-clean").classList.add("hidden");
 		} else {
 			alert(t().envsecImportError + (result?.error ? `: ${result.error}` : ""));
 		}
-	} catch {
-		alert(t().envsecImportError);
-	} finally {
-		confirmBtn.disabled = false;
-		$("btnEnvsecConfirmText").textContent = t().envsecConfirmImport;
-	}
-}
+	}).pipe(
+		Effect.catchTag("BackendError", () => Effect.sync(() => alert(t().envsecImportError))),
+		Effect.ensuring(
+			Effect.sync(() => {
+				confirmBtn.disabled = false;
+				$("btnEnvsecConfirmText").textContent = t().envsecConfirmImport;
+			}),
+		),
+	);
+});
 
 $("btnEnvsecCancel").addEventListener("click", closeEnvsecImportForm);
-$("btnEnvsecConfirm").addEventListener("click", confirmEnvsecImport);
+$("btnEnvsecConfirm").addEventListener("click", () => run(confirmEnvsecImport()));
 $("envsecContextInput").addEventListener("keydown", (e) => {
-	if (e.key === "Enter") confirmEnvsecImport();
+	if (e.key === "Enter") run(confirmEnvsecImport());
 	if (e.key === "Escape") closeEnvsecImportForm();
 });
 
@@ -1146,7 +1294,7 @@ $("cleanSelectAll").addEventListener("change", () => {
 	updateCleanSelection();
 });
 
-$("btnOpenClean").addEventListener("click", () => openCleanModal());
+$("btnOpenClean").addEventListener("click", () => run(openCleanModal()));
 
 $("btnCancelClean").addEventListener("click", () => {
 	$("modal-clean").classList.add("hidden");
@@ -1156,84 +1304,111 @@ $("modal-clean").querySelector(".modal-backdrop")!.addEventListener("click", () 
 	$("modal-clean").classList.add("hidden");
 });
 
-$("btnConfirmClean").addEventListener("click", async () => {
-	if (cleanableSelected.size === 0) return;
-	const paths = Array.from(cleanableSelected);
-	const btn = $("btnConfirmClean") as HTMLButtonElement;
-	btn.disabled = true;
-	$("btnConfirmCleanText").textContent = t().cleaningInProgress;
+const confirmBatchClean = Effect.fn("confirmBatchClean")(
+	function* () {
+		if (cleanableSelected.size === 0) return;
+		const paths = Array.from(cleanableSelected);
+		const btn = $("btnConfirmClean") as HTMLButtonElement;
+		btn.disabled = true;
+		$("btnConfirmCleanText").textContent = t().cleaningInProgress;
 
-	try {
-		const result = await electrobun.rpc?.request?.batchDelete({ paths });
+		const backend = yield* Backend;
+		const result = yield* backend.batchDelete({ paths });
 		$("modal-clean").classList.add("hidden");
 
 		if (result) {
 			if (result.deletedSize > 0) {
 				totalFreedBytes += result.deletedSize;
-				showFreedToast(result.deletedSize);
-				electrobun.rpc?.request?.recordDeletion({ freedBytes: result.deletedSize, deleteCount: result.deletedCount });
+				yield* showFreedToast(result.deletedSize);
+				yield* recordDeletion(result.deletedSize, result.deletedCount);
 			}
 			if (result.errors.length > 0) {
-				console.error("[cleanables] batch delete errors:", result.errors);
+				yield* Effect.logError("[cleanables] batch delete errors:", result.errors);
 			}
 			if (currentTree) {
-				await loadTreeFromCache(currentTree.path, true);
-				detectAndShowCleanables(currentTree.path, false);
+				yield* loadTreeFromCache(currentTree.path, true);
+				yield* background(detectAndShowCleanables(currentTree.path, false));
 			}
 		}
-	} catch (e) {
-		console.error("[cleanables] batch delete error:", e);
-		$("modal-clean").classList.add("hidden");
-	}
-});
+	},
+	Effect.catchTag("BackendError", (e) =>
+		Effect.gen(function* () {
+			yield* Effect.logError("[cleanables] batch delete error:", e.cause);
+			$("modal-clean").classList.add("hidden");
+		}),
+	),
+);
+
+$("btnConfirmClean").addEventListener("click", () => run(confirmBatchClean()));
 
 // --- Navigation ---
-$("btnBack").addEventListener("click", () => {
+const navigateBack = Effect.fnUntraced(function* () {
 	if (navigationStack.length > 1) {
 		navigationStack.pop();
 		renderResults(navigationStack[navigationStack.length - 1]!);
 	} else {
-		showScreen("welcome");
-		renderCacheList();
+		yield* goToWelcome();
 	}
 });
+
+$("btnBack").addEventListener("click", () => run(navigateBack()));
 
 // --- Scan ---
 $("btnScan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
 	if (!dirPath) return;
 	acList.classList.add("hidden");
-	startScan(dirPath);
+	run(startScan(dirPath));
 });
 
 $("btnRescan").addEventListener("click", () => {
 	const dirPath = scanPathInput.value.trim();
-	startScan(dirPath);
+	run(startScan(dirPath));
 });
 
 $("btnCancelScan").addEventListener("click", () => {
-	cancelScan();
+	run(cancelScan());
 });
 
 // --- Render cache list ---
-async function renderCacheList() {
-	const result = await electrobun.rpc?.request?.getCacheList({});
-	const container = $("cacheList");
-	container.innerHTML = "";
-	if (!result || result.entries.length === 0) {
-		container.classList.add("hidden");
-		return;
-	}
-	container.classList.remove("hidden");
-	for (const entry of result.entries) {
-		const date = new Date(entry.timestamp);
-		const dateStr = date.toLocaleDateString(getLocale(), {
-			day: "numeric", month: "short",
-			hour: "2-digit", minute: "2-digit",
-		});
-		const card = document.createElement("div");
-		card.className = "cache-card";
-		card.innerHTML = `
+const openCachedScan = Effect.fn("openCachedScan")(
+	function* (path: string) {
+		scanPathInput.value = path;
+		yield* loadTreeFromCache(path, false);
+		yield* background(detectAndShowCleanables(path));
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] openCachedScan error:", e.cause)),
+);
+
+const deleteCacheEntry = Effect.fn("deleteCacheEntry")(
+	function* (path: string) {
+		const backend = yield* Backend;
+		yield* backend.deleteCacheEntry({ rootPath: path });
+		yield* background(renderCacheList());
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] deleteCacheEntry error:", e.cause)),
+);
+
+const renderCacheList: () => Effect.Effect<void, never, MainviewServices> = Effect.fn("renderCacheList")(
+	function* () {
+		const backend = yield* Backend;
+		const result = yield* backend.getCacheList({});
+		const container = $("cacheList");
+		container.innerHTML = "";
+		if (!result || result.entries.length === 0) {
+			container.classList.add("hidden");
+			return;
+		}
+		container.classList.remove("hidden");
+		for (const entry of result.entries) {
+			const date = new Date(entry.timestamp);
+			const dateStr = date.toLocaleDateString(getLocale(), {
+				day: "numeric", month: "short",
+				hour: "2-digit", minute: "2-digit",
+			});
+			const card = document.createElement("div");
+			card.className = "cache-card";
+			card.innerHTML = `
 			<div class="cache-card-info">
 				<span class="cache-card-path" title="${escapeAttr(entry.rootPath)}">${escapeHtml(entry.rootPath.replace(/\/$/, ""))}</span>
 				<span class="cache-card-date">${dateStr}</span>
@@ -1244,32 +1419,31 @@ async function renderCacheList() {
 			</div>
 			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="${t().removeCache}"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 		`;
-		container.appendChild(card);
-	}
-	container.querySelectorAll("[data-action='open']").forEach((btn) => {
-		btn.addEventListener("click", async (e) => {
-			const path = (e.currentTarget as HTMLElement).dataset.path!;
-			scanPathInput.value = path;
-			await loadTreeFromCache(path, false);
-			detectAndShowCleanables(path);
+			container.appendChild(card);
+		}
+		container.querySelectorAll("[data-action='open']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				const path = (e.currentTarget as HTMLElement).dataset.path!;
+				run(openCachedScan(path));
+			});
 		});
-	});
-	container.querySelectorAll("[data-action='rescan']").forEach((btn) => {
-		btn.addEventListener("click", (e) => {
-			const path = (e.currentTarget as HTMLElement).dataset.path!;
-			scanPathInput.value = path;
-			startScan(path);
+		container.querySelectorAll("[data-action='rescan']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				const path = (e.currentTarget as HTMLElement).dataset.path!;
+				scanPathInput.value = path;
+				run(startScan(path));
+			});
 		});
-	});
-	container.querySelectorAll("[data-action='delete-cache']").forEach((btn) => {
-		btn.addEventListener("click", async (e) => {
-			e.stopPropagation();
-			const path = (e.currentTarget as HTMLElement).dataset.path!;
-			await electrobun.rpc?.request?.deleteCacheEntry({ rootPath: path });
-			renderCacheList();
+		container.querySelectorAll("[data-action='delete-cache']").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				const path = (e.currentTarget as HTMLElement).dataset.path!;
+				run(deleteCacheEntry(path));
+			});
 		});
-	});
-}
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] renderCacheList error:", e.cause)),
+);
 
 // --- Delete modal ---
 $("btnCancelDelete").addEventListener("click", () => {
@@ -1284,29 +1458,35 @@ $("modal-delete").querySelector(".modal-backdrop")!.addEventListener("click", ()
 	pendingDeleteSize = 0;
 });
 
-$("btnConfirmDelete").addEventListener("click", async () => {
-	if (!pendingDeletePath) return;
-	$("modal-delete").classList.add("hidden");
-	const path = pendingDeletePath;
-	const deletedSize = pendingDeleteSize;
-	pendingDeletePath = null;
-	pendingDeleteSize = 0;
+const confirmDelete = Effect.fn("confirmDelete")(
+	function* () {
+		if (!pendingDeletePath) return;
+		$("modal-delete").classList.add("hidden");
+		const path = pendingDeletePath;
+		const deletedSize = pendingDeleteSize;
+		pendingDeletePath = null;
+		pendingDeleteSize = 0;
 
-	const result = await electrobun.rpc?.request?.deleteEntry({ entryPath: path });
-	if (result && !result.success) {
-		alert(t().deleteError + " " + (result.error || t().unknownError));
-	} else {
-		totalFreedBytes += deletedSize;
-		showFreedToast(deletedSize);
-		electrobun.rpc?.request?.recordDeletion({ freedBytes: deletedSize, deleteCount: 1 });
-		if (result?.rootPath) {
-			await loadTreeFromCache(result.rootPath, true);
+		const backend = yield* Backend;
+		const result = yield* backend.deleteEntry({ entryPath: path });
+		if (result && !result.success) {
+			alert(t().deleteError + " " + (result.error || t().unknownError));
+		} else {
+			totalFreedBytes += deletedSize;
+			yield* showFreedToast(deletedSize);
+			yield* recordDeletion(deletedSize, 1);
+			if (result?.rootPath) {
+				yield* loadTreeFromCache(result.rootPath, true);
+			}
 		}
-	}
-});
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] deleteEntry error:", e.cause)),
+);
+
+$("btnConfirmDelete").addEventListener("click", () => run(confirmDelete()));
 
 // --- Freed space toast ---
-function showFreedToast(justFreed: number) {
+const showFreedToast = Effect.fnUntraced(function* (justFreed: number) {
 	const toast = $("freedToast");
 	const justEl = $("freedJust");
 	const totalEl = $("freedTotal");
@@ -1325,13 +1505,18 @@ function showFreedToast(justFreed: number) {
 	void toast.offsetWidth;
 	toast.classList.add("toast-enter");
 
-	if (toastTimeout) clearTimeout(toastTimeout);
-	toastTimeout = setTimeout(() => {
-		toast.classList.remove("toast-enter");
-		toast.classList.add("toast-exit");
-		setTimeout(() => toast.classList.add("hidden"), 300);
-	}, 3000);
-}
+	// A new toast restarts the hide timer (and cancels a pending exit).
+	yield* inSlot(
+		"toast",
+		Effect.gen(function* () {
+			yield* Effect.sleep("3 seconds");
+			toast.classList.remove("toast-enter");
+			toast.classList.add("toast-exit");
+			yield* Effect.sleep("300 millis");
+			toast.classList.add("hidden");
+		}),
+	);
+});
 
 // --- Resize handler ---
 window.addEventListener("resize", () => {
@@ -1344,7 +1529,7 @@ window.addEventListener("resize", () => {
 	// Re-render stats chart on resize if on welcome screen
 	const activeScreen = document.querySelector(".screen.active");
 	if (activeScreen?.id === "screen-welcome" && !$("statsWidget").classList.contains("hidden")) {
-		renderStatsWidget();
+		run(inSlot("stats", renderStatsWidget()));
 	}
 });
 
@@ -1353,36 +1538,39 @@ const acList = $("autocompleteList");
 const btnScan = $("btnScan") as HTMLButtonElement;
 const scanPathLabel = $("scanPathLabel");
 let acIndex = -1;
-let acDebounce: ReturnType<typeof setTimeout> | null = null;
-let validateDebounce: ReturnType<typeof setTimeout> | null = null;
 
-async function validatePath(dirPath: string) {
-	if (!dirPath.trim()) {
-		btnScan.disabled = true;
-		scanPathLabel.textContent = t().scanLabel;
-		scanPathLabel.style.color = "";
-		return;
-	}
-	const result = await electrobun.rpc?.request?.validatePath({ dirPath: dirPath.trim() });
-	if (result?.valid) {
-		btnScan.disabled = false;
-		scanPathLabel.textContent = t().scanLabel;
-		scanPathLabel.style.color = "";
-	} else {
-		btnScan.disabled = true;
-		scanPathLabel.textContent = t().dirNotFound;
-		scanPathLabel.style.color = "var(--danger)";
-	}
-}
+const validatePath = Effect.fn("validatePath")(
+	function* (dirPath: string) {
+		if (!dirPath.trim()) {
+			btnScan.disabled = true;
+			scanPathLabel.textContent = t().scanLabel;
+			scanPathLabel.style.color = "";
+			return;
+		}
+		const backend = yield* Backend;
+		const result = yield* backend.validatePath({ dirPath: dirPath.trim() });
+		if (result?.valid) {
+			btnScan.disabled = false;
+			scanPathLabel.textContent = t().scanLabel;
+			scanPathLabel.style.color = "";
+		} else {
+			btnScan.disabled = true;
+			scanPathLabel.textContent = t().dirNotFound;
+			scanPathLabel.style.color = "var(--danger)";
+		}
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[autocomplete] validatePath error:", e.cause)),
+);
 
-async function fetchSuggestions(partial: string) {
-	if (!partial || partial.length < 1) {
-		acList.classList.add("hidden");
-		return;
-	}
-	try {
-		const result = await electrobun.rpc?.request?.listDir({ partial });
-		console.log("[autocomplete] partial:", partial, "result:", result);
+const fetchSuggestions: (partial: string) => Effect.Effect<void, never, MainviewServices> = Effect.fn("fetchSuggestions")(
+	function* (partial: string) {
+		if (!partial || partial.length < 1) {
+			acList.classList.add("hidden");
+			return;
+		}
+		const backend = yield* Backend;
+		const result = yield* backend.listDir({ partial });
+		yield* Effect.log("[autocomplete] partial:", partial, "result:", result);
 		if (!result || !result.suggestions || result.suggestions.length === 0) {
 			acList.classList.add("hidden");
 			return;
@@ -1395,32 +1583,43 @@ async function fetchSuggestions(partial: string) {
 			item.textContent = s;
 			item.addEventListener("mousedown", (e) => {
 				e.preventDefault();
-				scanPathInput.value = s + "/";
-				acList.classList.add("hidden");
-				fetchSuggestions(s + "/");
-				validatePath(s + "/");
+				run(acceptSuggestion(s));
 			});
 			acList.appendChild(item);
 		}
 		acList.classList.remove("hidden");
-	} catch (err) {
-		console.error("[autocomplete] error:", err);
-		acList.classList.add("hidden");
-	}
-}
+	},
+	Effect.catchTag("BackendError", (e) =>
+		Effect.gen(function* () {
+			yield* Effect.logError("[autocomplete] error:", e.cause);
+			acList.classList.add("hidden");
+		}),
+	),
+);
+
+// Autocomplete and path validation each own a slot, so a newer request
+// (debounced or immediate) supersedes an older one still in flight.
+const suggest = (partial: string) => inSlot("autocomplete", fetchSuggestions(partial));
+const validate = (dirPath: string) => inSlot("validatePath", validatePath(dirPath));
+
+// Fill the input with a suggestion and look one level deeper.
+const acceptSuggestion = Effect.fnUntraced(function* (suggestion: string) {
+	scanPathInput.value = suggestion + "/";
+	acList.classList.add("hidden");
+	yield* suggest(suggestion + "/");
+	yield* validate(suggestion + "/");
+});
 
 const inputHint = $("inputHint");
 
 scanPathInput.addEventListener("input", () => {
 	inputHint.style.display = scanPathInput.value ? "none" : "";
-	if (acDebounce) clearTimeout(acDebounce);
-	if (validateDebounce) clearTimeout(validateDebounce);
-	acDebounce = setTimeout(() => {
-		fetchSuggestions(scanPathInput.value);
-	}, 120);
-	validateDebounce = setTimeout(() => {
-		validatePath(scanPathInput.value);
-	}, 250);
+	run(
+		Effect.gen(function* () {
+			yield* debounced("autocomplete", "120 millis", Effect.suspend(() => fetchSuggestions(scanPathInput.value)));
+			yield* debounced("validatePath", "250 millis", Effect.suspend(() => validatePath(scanPathInput.value)));
+		}),
+	);
 });
 
 scanPathInput.addEventListener("keydown", (e) => {
@@ -1432,7 +1631,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 		acList.classList.add("hidden");
 		const dirPath = scanPathInput.value.trim();
 		if (dirPath) {
-			startScan(dirPath);
+			run(startScan(dirPath));
 		}
 		return;
 	}
@@ -1442,10 +1641,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 			e.preventDefault();
 			const selected = items[acIndex] as HTMLElement;
 			const val = selected.textContent || "";
-			scanPathInput.value = val + "/";
-			acList.classList.add("hidden");
-			fetchSuggestions(val + "/");
-			validatePath(val + "/");
+			run(acceptSuggestion(val));
 		} else {
 			acList.classList.add("hidden");
 		}
@@ -1468,10 +1664,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 		e.preventDefault();
 		const selected = items[acIndex] as HTMLElement;
 		const val = selected.textContent || "";
-		scanPathInput.value = val + "/";
-		acList.classList.add("hidden");
-		fetchSuggestions(val + "/");
-		validatePath(val + "/");
+		run(acceptSuggestion(val));
 	}
 });
 
@@ -1483,11 +1676,11 @@ function updateAcActive(items: NodeListOf<Element>) {
 }
 
 scanPathInput.addEventListener("blur", () => {
-	setTimeout(() => acList.classList.add("hidden"), 150);
+	run(debounced("autocompleteHide", "150 millis", Effect.sync(() => acList.classList.add("hidden"))));
 });
 
 scanPathInput.addEventListener("focus", () => {
-	if (scanPathInput.value) fetchSuggestions(scanPathInput.value);
+	if (scanPathInput.value) run(suggest(scanPathInput.value));
 });
 
 // --- Settings (responsive collapsed tab) ---
@@ -1517,26 +1710,35 @@ const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
 const settingMaxDepth = $("settingMaxDepth") as HTMLInputElement;
 const settingDeleteMode = $("settingDeleteMode") as HTMLSelectElement;
 const settingLang = $("settingLang") as HTMLSelectElement;
-let settingsSaveDebounce: ReturnType<typeof setTimeout> | null = null;
 
-async function loadSettingsUI() {
-	const settings = await electrobun.rpc?.request?.getSettings({});
-	if (settings) {
-		settingMaxCache.value = String(settings.maxCacheEntries);
-		settingMaxDepth.value = String(settings.maxDepth);
-		settingDeleteMode.value = settings.deleteMode;
-	}
-}
+const loadSettingsUI = Effect.fn("loadSettingsUI")(
+	function* () {
+		const backend = yield* Backend;
+		const settings = yield* backend.getSettings({});
+		if (settings) {
+			settingMaxCache.value = String(settings.maxCacheEntries);
+			settingMaxDepth.value = String(settings.maxDepth);
+			settingDeleteMode.value = settings.deleteMode;
+		}
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[settings] load error:", e.cause)),
+);
 
-function saveSettingsDebounced() {
-	if (settingsSaveDebounce) clearTimeout(settingsSaveDebounce);
-	settingsSaveDebounce = setTimeout(async () => {
-		await electrobun.rpc?.request?.saveSettings({
+// Reads the inputs when it runs, i.e. after the debounce delay.
+const saveSettings = Effect.fn("saveSettings")(
+	function* () {
+		const backend = yield* Backend;
+		yield* backend.saveSettings({
 			maxCacheEntries: Number(settingMaxCache.value) || 10,
 			deleteMode: settingDeleteMode.value,
 			maxDepth: Number(settingMaxDepth.value) || 10,
 		});
-	}, 400);
+	},
+	Effect.catchTag("BackendError", (e) => Effect.logError("[settings] save error:", e.cause)),
+);
+
+function saveSettingsDebounced() {
+	run(debounced("saveSettings", "400 millis", saveSettings()));
 }
 
 settingMaxCache.addEventListener("change", saveSettingsDebounced);
@@ -1561,7 +1763,7 @@ settingLang.addEventListener("change", () => {
 	setLanguage(settingLang.value);
 	applyTranslations();
 	// Re-render dynamic content
-	renderCacheList();
+	run(renderCacheList());
 });
 
 // --- Apply all translations to static DOM elements ---
@@ -1626,7 +1828,9 @@ function applyTranslations() {
 // --- Info Panel ---
 let infoPanelOpen = false;
 
-function openInfoPanel(entryPath: string) {
+// Runs in the "infoPanel" slot: opening cancels a pending close animation and
+// any previous entry still loading.
+const openInfoPanel = Effect.fn("openInfoPanel")(function* (entryPath: string) {
 	const panel = $("infoPanel");
 	const backdrop = $("infoPanelBackdrop");
 	const body = $("infoPanelBody");
@@ -1642,18 +1846,27 @@ function openInfoPanel(entryPath: string) {
 	backdrop.classList.add("visible");
 	infoPanelOpen = true;
 
-	electrobun.rpc?.request?.getEntryInfo({ entryPath }).then((info: any) => {
-		if (!info || info.error) {
-			body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`;
-			title.textContent = t().errorTitle;
-			return;
-		}
-		title.textContent = info.name;
-		renderInfoPanelContent(info as EntryInfo);
-	}).catch(() => {
-		body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`;
-	});
-}
+	const backend = yield* Backend;
+	yield* backend.getEntryInfo({ entryPath }).pipe(
+		Effect.tap((info) =>
+			Effect.sync(() => {
+				// The Bun side may answer with an `{ error }` object instead of an EntryInfo.
+				if (!info || (info as EntryInfo & { error?: unknown }).error) {
+					body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`;
+					title.textContent = t().errorTitle;
+					return;
+				}
+				title.textContent = info.name;
+				renderInfoPanelContent(info);
+			}),
+		),
+		Effect.catchTag("BackendError", () =>
+			Effect.sync(() => {
+				body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`;
+			}),
+		),
+	);
+});
 
 function closeInfoPanel() {
 	const panel = $("infoPanel");
@@ -1661,10 +1874,16 @@ function closeInfoPanel() {
 	panel.classList.remove("visible");
 	backdrop.classList.remove("visible");
 	infoPanelOpen = false;
-	setTimeout(() => {
-		panel.classList.add("hidden");
-		backdrop.classList.add("hidden");
-	}, 260);
+	run(
+		debounced(
+			"infoPanel",
+			"260 millis",
+			Effect.sync(() => {
+				panel.classList.add("hidden");
+				backdrop.classList.add("hidden");
+			}),
+		),
+	);
 }
 
 function formatDate(ms: number): string {
@@ -1783,20 +2002,13 @@ document.addEventListener("keydown", (e) => {
 
 	if (e.key === "Backspace" && isResults) {
 		e.preventDefault();
-		if (navigationStack.length > 1) {
-			navigationStack.pop();
-			renderResults(navigationStack[navigationStack.length - 1]!);
-		} else {
-			showScreen("welcome");
-			renderCacheList();
-		}
+		run(navigateBack());
 		return;
 	}
 
 	if (e.key === "Escape" && isResults) {
 		e.preventDefault();
-		showScreen("welcome");
-		renderCacheList();
+		run(goToWelcome());
 		return;
 	}
 });
@@ -1804,14 +2016,15 @@ document.addEventListener("keydown", (e) => {
 // --- Stats Widget (Canvas 2D sparkline bar chart) ---
 let statsAnimId2: number | null = null;
 
-async function renderStatsWidget() {
+// Runs in the "stats" slot, so only the latest render applies its result.
+const renderStatsWidget = Effect.fn("renderStatsWidget")(function* () {
 	const widget = $("statsWidget");
 	const tr = t();
 
-	let stats: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } | null = null;
-	try {
-		stats = await electrobun.rpc?.request?.getStats({ days: 14 }) ?? null;
-	} catch { /* ignore */ }
+	const backend = yield* Backend;
+	const stats = yield* backend.getStats({ days: 14 }).pipe(
+		Effect.catchTag("BackendError", () => Effect.succeed(null)),
+	);
 
 	if (!stats || stats.totalFreed === 0) {
 		widget.classList.add("hidden");
@@ -1920,22 +2133,29 @@ async function renderStatsWidget() {
 	}
 
 	statsAnimId2 = requestAnimationFrame(drawFrame);
-}
-
-// --- Init ---
-populateLanguageSelector();
-applyTranslations();
-renderCacheList();
-loadSettingsUI();
-renderStatsWidget();
+});
 
 // --- Version label ---
-(async () => {
-	try {
-		const info = await electrobun.rpc?.request?.getAppVersion({});
+const loadVersionLabel = Effect.fn("loadVersionLabel")(
+	function* () {
+		const backend = yield* Backend;
+		const info = yield* backend.getAppVersion({});
 		const label = document.getElementById("versionLabel");
 		if (label && info?.version) {
 			label.textContent = `v${info.version}`;
 		}
-	} catch {}
-})();
+	},
+	Effect.catchTag("BackendError", () => Effect.void),
+);
+
+// --- Init ---
+populateLanguageSelector();
+applyTranslations();
+run(
+	Effect.gen(function* () {
+		yield* background(renderCacheList());
+		yield* background(loadSettingsUI());
+		yield* inSlot("stats", renderStatsWidget());
+		yield* background(loadVersionLabel());
+	}),
+);

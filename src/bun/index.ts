@@ -1,66 +1,47 @@
-import { BrowserView, BrowserWindow, Screen, ApplicationMenu, Updater } from "electrobun/bun";
-import { statSync } from "fs";
+import { ApplicationMenu, BrowserView, BrowserWindow, Screen } from "electrobun/bun";
+import { BunRuntime } from "@effect/platform-bun";
+import { Cause, Effect, Exit, Fiber, FiberHandle, Layer, Option } from "effect";
 import {
 	type AppSettings,
-	type CacheEntry,
-	type CancelToken,
 	type CleanableResult,
+	type CoreServices,
 	type DirEntry,
 	type EntryInfo,
-	ScanCancelledError,
-	batchDelete,
-	deleteCacheEntry,
-	detectCleanables,
+	CacheStore,
+	Cleanables,
+	CoreLayer,
+	EntryInfoReader,
+	Envsec,
+	FileActions,
+	Scanner,
+	Settings,
+	Stats,
 	expandPath,
-	findCacheEntry,
 	findChildrenInStore,
-	getEntryInfo,
-	getStats,
-	importEnvToEnvsec,
-	isDirectory,
-	isEnvsecAvailable,
 	listCacheEntries,
-	listDirSuggestions,
-	loadCacheStore,
-	loadSettings,
 	normalizeSettings,
-	recordDeletion,
-	revealInFinder,
-	saveCacheStore,
-	saveSettings,
-	scanDirectory,
-	throttledProgress,
-	upsertCacheEntry,
 } from "../core";
+import { AppUpdater } from "./updater";
 
-// Active scan / Smart Clean detection (cancellable from the UI)
-let currentScan: CancelToken = { cancelled: false };
-
-// --- Window & RPC ---
-const display = Screen.getPrimaryDisplay();
-const workArea = display.workArea;
-
-let mainWin: InstanceType<typeof BrowserWindow> | null = null;
-
-const rpc = BrowserView.defineRPC<{
+type DesktopRPC = {
 	bun: {
 		requests: {
 			scanDirectory: { params: { dirPath: string }; response: { success: boolean; rootPath?: string; error?: string } };
-			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
+			getChildren: { params: { dirPath: string }; response: { children: readonly DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string; rootPath?: string } };
 			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
-			listDir: { params: { partial: string }; response: { suggestions: string[] } };
+			listDir: { params: { partial: string }; response: { suggestions: readonly string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
 			getSettings: { params: {}; response: AppSettings };
 			saveSettings: { params: { maxCacheEntries: number; deleteMode: string; maxDepth: number }; response: { success: boolean } };
 			detectCleanables: { params: { rootPath: string }; response: CleanableResult };
 			getCachedCleanables: { params: { rootPath: string }; response: { found: boolean; cleanables?: CleanableResult } };
 			saveCachedCleanables: { params: { rootPath: string; cleanables: CleanableResult }; response: { success: boolean } };
-			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: string[] } };
+			batchDelete: { params: { paths: string[] }; response: { success: boolean; deletedCount: number; deletedSize: number; errors: readonly string[] } };
 			getEntryInfo: { params: { entryPath: string }; response: EntryInfo | { error: string } };
 			cancelScan: { params: {}; response: { success: boolean } };
-			getStats: { params: { days: number }; response: { entries: { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
+			getStats: { params: { days: number }; response: { entries: readonly { date: string; freedBytes: number; deleteCount: number }[]; totalFreed: number; totalDeleted: number } };
 			recordDeletion: { params: { freedBytes: number; deleteCount: number }; response: { success: boolean } };
 			revealInFinder: { params: { filePath: string }; response: { success: boolean } };
 			checkEnvsecAvailable: { params: {}; response: { available: boolean } };
@@ -84,298 +65,326 @@ const rpc = BrowserView.defineRPC<{
 			updateError: { message: string };
 		};
 	};
-}>({
-	maxRequestTime: 300000,
-	handlers: {
-		requests: {
-			getCacheList: async () => {
-				const store = await loadCacheStore();
-				return { entries: listCacheEntries(store).map(({ rootPath, timestamp }) => ({ rootPath, timestamp })) };
-			},
-			cancelScan: async () => {
-				console.log("[scan] Cancel requested");
-				currentScan.cancelled = true;
-				return { success: true };
-			},
-			deleteCacheEntry: async ({ rootPath }) => {
-				await deleteCacheEntry(rootPath);
-				return { success: true };
-			},
-			scanDirectory: async ({ dirPath }) => {
-				const targetPath = expandPath(dirPath || "~");
-				console.log(`[scan] === REQUEST RECEIVED === dirPath="${dirPath}" targetPath="${targetPath}"`);
-				if (!statSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) {
-					return { success: false, error: "Directory not found" };
-				}
-				currentScan = { cancelled: false };
-				const settings = await loadSettings();
-				console.log(`[scan] Starting scan (maxDepth=${settings.maxDepth})...`);
-				const startNs = Bun.nanoseconds();
-				try {
-					const { tree, progress } = await scanDirectory(targetPath, {
-						maxDepth: settings.maxDepth,
-						cancel: currentScan,
-						onProgress: throttledProgress((p) => rpc.send.scanProgress({ currentDir: p.currentDir }), 200),
-					});
-					const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
-					console.log(`[scan] Scan complete in ${elapsedMs.toFixed(2)}ms — dirs=${progress.dirs} files=${progress.files} treeSize=${tree.size}`);
-					const entry: CacheEntry = { timestamp: Date.now(), rootPath: targetPath, tree };
-					// New scan: don't carry over old cleanables — they'll be re-detected
-					const store = await loadCacheStore();
-					await saveCacheStore(await upsertCacheEntry(store, entry));
-					return { success: true, rootPath: targetPath };
-				} catch (e: any) {
-					if (e instanceof ScanCancelledError) {
-						console.log(`[scan] Scan cancelled by user`);
-						return { success: false, error: "SCAN_CANCELLED" };
-					}
-					console.error(`[scan] ERROR:`, e);
-					return { success: false, error: e.message };
-				}
-			},
-			getChildren: async ({ dirPath }) => {
-				const store = await loadCacheStore();
-				return { children: findChildrenInStore(store, expandPath(dirPath || "~")) };
-			},
-			validatePath: async ({ dirPath }) => {
-				return { valid: isDirectory(dirPath || "") };
-			},
-			listDir: async ({ partial }) => {
-				return { suggestions: listDirSuggestions(partial) };
-			},
-			deleteEntry: async ({ entryPath }) => {
-				const result = await batchDelete([entryPath]);
-				if (!result.success) return { success: false, error: result.errors[0]?.replace(/^.*?: /, "") };
-				const store = await loadCacheStore();
-				return { success: true, rootPath: store.entries[0]?.rootPath };
-			},
-			getSettings: async () => {
-				return await loadSettings();
-			},
-			saveSettings: async (input) => {
-				const settings = normalizeSettings(input);
-				await saveSettings(settings);
-				// Trim cache if needed
-				const store = await loadCacheStore();
-				if (store.entries.length > settings.maxCacheEntries) {
-					store.entries = store.entries.slice(0, settings.maxCacheEntries);
-					await saveCacheStore(store);
-				}
-				return { success: true };
-			},
-			detectCleanables: async ({ rootPath }) => {
-				const resolved = expandPath(rootPath);
-				if (!isDirectory(resolved)) return { items: [], totalSize: 0 };
-				console.log(`[cleanables] Scanning ${resolved}...`);
-				const startNs = Bun.nanoseconds();
-				const result = await detectCleanables(resolved, { cancel: currentScan });
-				const elapsedMs = (Bun.nanoseconds() - startNs) / 1_000_000;
-				console.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${elapsedMs.toFixed(2)}ms`);
-				return result;
-			},
-			getCachedCleanables: async ({ rootPath }) => {
-				const resolved = expandPath(rootPath);
-				const entry = findCacheEntry(await loadCacheStore(), resolved);
-				if (entry?.cleanables) {
-					console.log(`[cleanables] Cache hit for ${resolved} (${entry.cleanables.items.length} items)`);
-					return { found: true, cleanables: entry.cleanables };
-				}
-				return { found: false };
-			},
-			saveCachedCleanables: async ({ rootPath, cleanables }) => {
-				const resolved = expandPath(rootPath);
-				const store = await loadCacheStore();
-				const entry = findCacheEntry(store, resolved);
-				if (!entry) return { success: false };
-				entry.cleanables = cleanables;
-				await saveCacheStore(store);
-				console.log(`[cleanables] Saved to cache for ${resolved} (${cleanables.items.length} items)`);
-				return { success: true };
-			},
-			batchDelete: async ({ paths }) => {
-				const { success, deletedCount, deletedSize, errors } = await batchDelete(paths);
-				return { success, deletedCount, deletedSize, errors };
-			},
-			getEntryInfo: async ({ entryPath }) => {
-				const info = await getEntryInfo(entryPath);
-				if (!info) return { error: "Cannot read entry info" };
-				return info;
-			},
-			getStats: async ({ days }) => {
-				return await getStats(days);
-			},
-			recordDeletion: async ({ freedBytes, deleteCount }) => {
-				await recordDeletion(freedBytes, deleteCount);
-				return { success: true };
-			},
-			revealInFinder: async ({ filePath }) => {
-				return { success: await revealInFinder(filePath) };
-			},
-			checkEnvsecAvailable: async () => {
-				return { available: await isEnvsecAvailable() };
-			},
-			importEnvToEnvsec: async ({ filePath, context }) => {
-				return await importEnvToEnvsec(filePath, context);
-			},
-			checkForUpdate: async () => {
-				try {
-					const updateInfo = await Updater.checkForUpdate();
-					console.log(`[updater] Check result: version=${updateInfo.version} available=${updateInfo.updateAvailable} ready=${updateInfo.updateReady}`);
-					if (updateInfo.updateAvailable) {
-						rpc.send.updateAvailable({ version: updateInfo.version });
-					}
-					return {
-						version: updateInfo.version,
-						updateAvailable: updateInfo.updateAvailable,
-						updateReady: updateInfo.updateReady,
-					};
-				} catch (e: any) {
-					console.error("[updater] Check error:", e);
-					return { version: "", updateAvailable: false, updateReady: false, error: e.message };
-				}
-			},
-			downloadUpdate: async () => {
-				try {
-					console.log("[updater] Starting download...");
-					await Updater.downloadUpdate();
-					const info = Updater.updateInfo();
-					console.log(`[updater] Download complete, ready=${info?.updateReady}`);
-					if (info?.updateReady) {
-						rpc.send.updateReady({ version: info.version });
-					}
-					return { success: true };
-				} catch (e: any) {
-					console.error("[updater] Download error:", e);
-					rpc.send.updateError({ message: e.message });
-					return { success: false, error: e.message };
-				}
-			},
-			applyUpdate: async () => {
-				try {
-					console.log("[updater] Applying update...");
-					await Updater.applyUpdate();
-					return { success: true };
-				} catch (e: any) {
-					console.error("[updater] Apply error:", e);
-					return { success: false, error: e.message };
-				}
-			},
-			getAppVersion: async () => {
-				try {
-					const local = await Updater.getLocallocalInfo();
-					return { version: local.version, channel: local.channel };
-				} catch (e: any) {
-					console.error("[updater] getLocalInfo error:", e);
-					return { version: "unknown", channel: "unknown" };
-				}
-			},
-			getWindowPosition: async () => {
-				const pos = mainWin!.getPosition();
-				return { x: pos.x, y: pos.y };
-			},
-			moveWindow: async ({ x, y }) => {
-				mainWin!.setPosition(x, y);
-				return { success: true };
-			},
-		},
-		messages: {},
-	},
-});
+};
 
-mainWin = new BrowserWindow({
-	title: "Ingombro",
-	url: "views://mainview/index.html",
-	frame: {
-		width: 1100,
-		height: 750,
-		x: workArea.x + Math.round((workArea.width - 1100) / 2),
-		y: workArea.y + Math.round((workArea.height - 750) / 2),
-	},
-	titleBarStyle: "hiddenInset",
-	transparent: false,
-	rpc,
-});
-
-// --- Enforce minimum window size ---
 const MIN_WIDTH = 640;
 const MIN_HEIGHT = 480;
-mainWin.on("resize", (event: any) => {
-	const { width, height } = event.data;
-	if (width < MIN_WIDTH || height < MIN_HEIGHT) {
-		mainWin.setSize(Math.max(width, MIN_WIDTH), Math.max(height, MIN_HEIGHT));
-	}
-});
 
-// --- Application Menu (enables Cmd+C, Cmd+V, etc.) ---
-ApplicationMenu.setApplicationMenu([
-	{
-		label: "Ingombro",
-		submenu: [
-			{ role: "about" },
-			{ type: "separator" },
-			{
-				label: "Check for Updates…",
-				action: "check-for-updates",
-			},
-			{ type: "separator" },
-			{ role: "hide", accelerator: "CmdOrCtrl+H" },
-			{ role: "hideOthers", accelerator: "CmdOrCtrl+Shift+H" },
-			{ role: "showAll" },
-			{ type: "separator" },
-			{ role: "quit", accelerator: "CmdOrCtrl+Q" },
-		],
-	},
-	{
-		label: "Edit",
-		submenu: [
-			{ role: "undo", accelerator: "CmdOrCtrl+Z" },
-			{ role: "redo", accelerator: "CmdOrCtrl+Shift+Z" },
-			{ type: "separator" },
-			{ role: "cut", accelerator: "CmdOrCtrl+X" },
-			{ role: "copy", accelerator: "CmdOrCtrl+C" },
-			{ role: "paste", accelerator: "CmdOrCtrl+V" },
-			{ role: "selectAll", accelerator: "CmdOrCtrl+A" },
-		],
-	},
-]);
+/** Window, RPC bridge, menu and update checks. Lives until the process is interrupted. */
+const DesktopApp = Layer.effectDiscard(
+	Effect.gen(function* () {
+		const context = yield* Effect.context<CoreServices | AppUpdater>();
+		// RPC handlers are plain async callbacks: run each request as an effect on the app's services
+		const run = Effect.runPromiseWith(context);
 
-// --- Handle "Check for Updates" menu action ---
-ApplicationMenu.on("application-menu-clicked", async (event: any) => {
-	if (event?.action === "check-for-updates") {
-		try {
-			console.log("[updater] Manual check from menu...");
-			const updateInfo = await Updater.checkForUpdate();
-			if (updateInfo.updateAvailable) {
-				rpc.send.updateAvailable({ version: updateInfo.version });
+		const settings = yield* Settings;
+		const cache = yield* CacheStore;
+		const stats = yield* Stats;
+		const scanner = yield* Scanner;
+		const cleanables = yield* Cleanables;
+		const entryInfo = yield* EntryInfoReader;
+		const actions = yield* FileActions;
+		const envsec = yield* Envsec;
+		const updater = yield* AppUpdater;
+
+		// The active scan (cancellable from the UI); starting a new one interrupts the previous
+		const activeScan = yield* FiberHandle.make<unknown, unknown>();
+
+		let mainWin: InstanceType<typeof BrowserWindow> | null = null;
+
+		const scanDirectory = Effect.fn("rpc.scanDirectory")(function* (dirPath: string) {
+			const targetPath = expandPath(dirPath || "~");
+			yield* Effect.log(`[scan] === REQUEST RECEIVED === dirPath="${dirPath}" targetPath="${targetPath}"`);
+			if (!(yield* actions.isDirectory(targetPath))) return { success: false, error: "Directory not found" };
+			const { maxDepth } = yield* settings.get;
+			yield* Effect.log(`[scan] Starting scan (maxDepth=${maxDepth})...`);
+
+			const scan = scanner
+				.scan(targetPath, {
+					maxDepth,
+					progressIntervalMs: 200,
+					onProgress: (p) => Effect.sync(() => rpc.send.scanProgress({ currentDir: p.currentDir })),
+				})
+				.pipe(
+					Effect.timed,
+					Effect.tap(([elapsed, { tree, progress }]) =>
+						Effect.log(
+							`[scan] Scan complete in ${elapsed.toString()} — dirs=${progress.dirs} files=${progress.files} treeSize=${tree.size}`,
+						),
+					),
+					// New scan: don't carry over old cleanables — they'll be re-detected
+					Effect.tap(([, { tree }]) => cache.upsert({ timestamp: Date.now(), rootPath: targetPath, tree })),
+				);
+
+			const exit = yield* Fiber.await(yield* FiberHandle.run(activeScan, scan));
+			if (Exit.isSuccess(exit)) return { success: true, rootPath: targetPath };
+			if (Cause.hasInterruptsOnly(exit.cause)) {
+				yield* Effect.log("[scan] Scan cancelled by user");
+				return { success: false, error: "SCAN_CANCELLED" };
 			}
-		} catch (e) {
-			console.error("[updater] Menu check error:", e);
-		}
-	}
-});
+			yield* Effect.logError("[scan] ERROR:", exit.cause);
+			return { success: false, error: "Scan failed" };
+		});
 
-// --- Auto-check for updates on startup (after a short delay) ---
-setTimeout(async () => {
-	try {
-		console.log("[updater] Auto-checking for updates...");
-		const updateInfo = await Updater.checkForUpdate();
-		if (updateInfo.updateAvailable) {
-			console.log(`[updater] Update available: ${updateInfo.version}`);
-			rpc.send.updateAvailable({ version: updateInfo.version });
-		} else {
-			console.log("[updater] App is up to date");
-		}
-	} catch (e) {
-		console.error("[updater] Auto-check failed:", e);
-	}
-}, 5000);
+		const detectCleanables = Effect.fn("rpc.detectCleanables")(function* (rootPath: string) {
+			const resolved = expandPath(rootPath);
+			if (!(yield* actions.isDirectory(resolved))) return { items: [], totalSize: 0 };
+			yield* Effect.log(`[cleanables] Scanning ${resolved}...`);
+			const [elapsed, result] = yield* Effect.timed(cleanables.detect(resolved));
+			yield* Effect.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${elapsed.toString()}`);
+			return result;
+		});
 
-// --- Clean shutdown: cancel active scans on quit ---
-process.on("SIGTERM", () => {
-	currentScan.cancelled = true;
-	process.exit(0);
-});
-process.on("SIGINT", () => {
-	currentScan.cancelled = true;
-	process.exit(0);
-});
+		const checkForUpdate = updater.check.pipe(
+			Effect.tap((info) =>
+				Effect.log(`[updater] Check result: version=${info.version} available=${info.updateAvailable} ready=${info.updateReady}`),
+			),
+			Effect.tap((info) => Effect.sync(() => info.updateAvailable && rpc.send.updateAvailable({ version: info.version }))),
+		);
+
+		const rpc: ReturnType<typeof BrowserView.defineRPC<DesktopRPC>> = BrowserView.defineRPC<DesktopRPC>({
+			maxRequestTime: 300000,
+			handlers: {
+				requests: {
+					getCacheList: () =>
+						run(
+							cache.load.pipe(
+								Effect.map((store) => ({
+									entries: listCacheEntries(store).map(({ rootPath, timestamp }) => ({ rootPath, timestamp })),
+								})),
+							),
+						),
+					cancelScan: () =>
+						run(
+							Effect.log("[scan] Cancel requested").pipe(
+								Effect.andThen(FiberHandle.clear(activeScan)),
+								Effect.as({ success: true }),
+							),
+						),
+					deleteCacheEntry: ({ rootPath }) => run(cache.remove(rootPath).pipe(Effect.as({ success: true }))),
+					scanDirectory: ({ dirPath }) => run(scanDirectory(dirPath)),
+					getChildren: ({ dirPath }) =>
+						run(cache.load.pipe(Effect.map((store) => ({ children: findChildrenInStore(store, expandPath(dirPath || "~")) })))),
+					validatePath: ({ dirPath }) => run(actions.isDirectory(dirPath || "").pipe(Effect.map((valid) => ({ valid })))),
+					listDir: ({ partial }) => run(actions.listDirSuggestions(partial).pipe(Effect.map((suggestions) => ({ suggestions })))),
+					deleteEntry: ({ entryPath }) =>
+						run(
+							Effect.gen(function* () {
+								const result = yield* actions.batchDelete([entryPath]);
+								if (!result.success) return { success: false, error: result.errors[0]?.replace(/^.*?: /, "") };
+								const store = yield* cache.load;
+								return { success: true, rootPath: store.entries[0]?.rootPath };
+							}),
+						),
+					getSettings: () => run(settings.get),
+					saveSettings: (input) =>
+						run(
+							Effect.gen(function* () {
+								const normalized = normalizeSettings(input);
+								yield* settings.save(normalized);
+								yield* cache.trim(normalized.maxCacheEntries);
+								return { success: true };
+							}),
+						),
+					detectCleanables: ({ rootPath }) => run(detectCleanables(rootPath)),
+					getCachedCleanables: ({ rootPath }) =>
+						run(
+							Effect.gen(function* () {
+								const resolved = expandPath(rootPath);
+								const entry = yield* cache.findEntry(resolved);
+								const found = Option.flatMapNullishOr(entry, (e) => e.cleanables);
+								if (Option.isNone(found)) return { found: false };
+								yield* Effect.log(`[cleanables] Cache hit for ${resolved} (${found.value.items.length} items)`);
+								return { found: true, cleanables: found.value };
+							}),
+						),
+					saveCachedCleanables: ({ rootPath, cleanables }) =>
+						run(
+							Effect.gen(function* () {
+								const resolved = expandPath(rootPath);
+								const success = yield* cache.setCleanables(resolved, cleanables);
+								if (success) yield* Effect.log(`[cleanables] Saved to cache for ${resolved} (${cleanables.items.length} items)`);
+								return { success };
+							}),
+						),
+					batchDelete: ({ paths }) =>
+						run(
+							actions
+								.batchDelete(paths)
+								.pipe(Effect.map(({ success, deletedCount, deletedSize, errors }) => ({ success, deletedCount, deletedSize, errors }))),
+						),
+					getEntryInfo: ({ entryPath }) =>
+						run(
+							entryInfo.get(entryPath).pipe(
+								Effect.catchTag("PathNotFound", () => Effect.succeed({ error: "Cannot read entry info" })),
+							),
+						),
+					getStats: ({ days }) => run(stats.summary(days)),
+					recordDeletion: ({ freedBytes, deleteCount }) =>
+						run(stats.recordDeletion(freedBytes, deleteCount).pipe(Effect.as({ success: true }))),
+					revealInFinder: ({ filePath }) =>
+						run(
+							actions.reveal(filePath).pipe(
+								Effect.as({ success: true }),
+								Effect.orElseSucceed(() => ({ success: false })),
+							),
+						),
+					checkEnvsecAvailable: () => run(envsec.isAvailable.pipe(Effect.map((available) => ({ available })))),
+					importEnvToEnvsec: ({ filePath, context }) =>
+						run(
+							envsec.importEnvFile(filePath, context).pipe(
+								Effect.map((imported) => ({ success: true, imported })),
+								Effect.catchTag("EnvsecError", (e) => Effect.succeed({ success: false, imported: 0, error: e.message })),
+							),
+						),
+					checkForUpdate: () =>
+						run(
+							checkForUpdate.pipe(
+								Effect.map((info) => ({
+									version: info.version,
+									updateAvailable: info.updateAvailable,
+									updateReady: info.updateReady,
+								})),
+								Effect.catchTag("UpdaterError", (e) =>
+									Effect.logError("[updater] Check error:", e.cause).pipe(
+										Effect.as({ version: "", updateAvailable: false, updateReady: false, error: e.message }),
+									),
+								),
+							),
+						),
+					downloadUpdate: () =>
+						run(
+							Effect.gen(function* () {
+								yield* Effect.log("[updater] Starting download...");
+								const readyVersion = yield* updater.download;
+								yield* Effect.log(`[updater] Download complete, ready=${readyVersion !== undefined}`);
+								if (readyVersion !== undefined) rpc.send.updateReady({ version: readyVersion });
+								return { success: true };
+							}).pipe(
+								Effect.catchTag("UpdaterError", (e) =>
+									Effect.gen(function* () {
+										yield* Effect.logError("[updater] Download error:", e.cause);
+										rpc.send.updateError({ message: e.message });
+										return { success: false, error: e.message };
+									}),
+								),
+							),
+						),
+					applyUpdate: () =>
+						run(
+							Effect.log("[updater] Applying update...").pipe(
+								Effect.andThen(updater.apply),
+								Effect.as({ success: true }),
+								Effect.catchTag("UpdaterError", (e) =>
+									Effect.logError("[updater] Apply error:", e.cause).pipe(Effect.as({ success: false, error: e.message })),
+								),
+							),
+						),
+					getAppVersion: () =>
+						run(
+							updater.localInfo.pipe(
+								Effect.map((local) => ({ version: local.version, channel: local.channel })),
+								Effect.catchTag("UpdaterError", (e) =>
+									Effect.logError("[updater] getLocalInfo error:", e.cause).pipe(
+										Effect.as({ version: "unknown", channel: "unknown" }),
+									),
+								),
+							),
+						),
+					getWindowPosition: async () => {
+						const pos = mainWin!.getPosition();
+						return { x: pos.x, y: pos.y };
+					},
+					moveWindow: async ({ x, y }) => {
+						mainWin!.setPosition(x, y);
+						return { success: true };
+					},
+				},
+				messages: {},
+			},
+		});
+
+		const workArea = Screen.getPrimaryDisplay().workArea;
+		const win = new BrowserWindow({
+			title: "Ingombro",
+			url: "views://mainview/index.html",
+			frame: {
+				width: 1100,
+				height: 750,
+				x: workArea.x + Math.round((workArea.width - 1100) / 2),
+				y: workArea.y + Math.round((workArea.height - 750) / 2),
+			},
+			titleBarStyle: "hiddenInset",
+			transparent: false,
+			rpc,
+		});
+		mainWin = win;
+
+		// --- Enforce minimum window size ---
+		win.on("resize", (event: any) => {
+			const { width, height } = event.data;
+			if (width < MIN_WIDTH || height < MIN_HEIGHT) {
+				win.setSize(Math.max(width, MIN_WIDTH), Math.max(height, MIN_HEIGHT));
+			}
+		});
+
+		// --- Application Menu (enables Cmd+C, Cmd+V, etc.) ---
+		ApplicationMenu.setApplicationMenu([
+			{
+				label: "Ingombro",
+				submenu: [
+					{ role: "about" },
+					{ type: "separator" },
+					{ label: "Check for Updates…", action: "check-for-updates" },
+					{ type: "separator" },
+					{ role: "hide", accelerator: "CmdOrCtrl+H" },
+					{ role: "hideOthers", accelerator: "CmdOrCtrl+Shift+H" },
+					{ role: "showAll" },
+					{ type: "separator" },
+					{ role: "quit", accelerator: "CmdOrCtrl+Q" },
+				],
+			},
+			{
+				label: "Edit",
+				submenu: [
+					{ role: "undo", accelerator: "CmdOrCtrl+Z" },
+					{ role: "redo", accelerator: "CmdOrCtrl+Shift+Z" },
+					{ type: "separator" },
+					{ role: "cut", accelerator: "CmdOrCtrl+X" },
+					{ role: "copy", accelerator: "CmdOrCtrl+C" },
+					{ role: "paste", accelerator: "CmdOrCtrl+V" },
+					{ role: "selectAll", accelerator: "CmdOrCtrl+A" },
+				],
+			},
+		]);
+
+		// --- Handle "Check for Updates" menu action ---
+		ApplicationMenu.on("application-menu-clicked", (event: any) => {
+			if (event?.action !== "check-for-updates") return;
+			void run(
+				Effect.log("[updater] Manual check from menu...").pipe(
+					Effect.andThen(checkForUpdate),
+					Effect.catchTag("UpdaterError", (e) => Effect.logError("[updater] Menu check error:", e.cause)),
+				),
+			);
+		});
+
+		// --- Auto-check for updates on startup (after a short delay) ---
+		yield* Effect.log("[updater] Auto-checking for updates...").pipe(
+			Effect.andThen(updater.check),
+			Effect.tap((info) =>
+				info.updateAvailable
+					? Effect.log(`[updater] Update available: ${info.version}`).pipe(
+							Effect.andThen(Effect.sync(() => rpc.send.updateAvailable({ version: info.version }))),
+						)
+					: Effect.log("[updater] App is up to date"),
+			),
+			Effect.catchTag("UpdaterError", (e) => Effect.logError("[updater] Auto-check failed:", e.cause)),
+			Effect.delay("5 seconds"),
+			Effect.forkScoped,
+		);
+	}),
+);
+
+// runMain handles SIGINT/SIGTERM: it interrupts the app (cancelling any active scan) and exits.
+DesktopApp.pipe(Layer.provide(Layer.mergeAll(CoreLayer, AppUpdater.layer)), Layer.launch, BunRuntime.runMain);
