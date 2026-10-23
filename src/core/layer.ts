@@ -1,5 +1,5 @@
-import { BunServices } from "@effect/platform-bun";
-import { Layer } from "effect";
+import { BunChildProcessSpawner, BunFileSystem, BunPath } from "@effect/platform-bun";
+import { type FileSystem, Layer, type Path } from "effect";
 import { Envsec, FileActions, Trash } from "./actions";
 import { CacheStore } from "./cache";
 import { Cleanables } from "./cleanables";
@@ -21,8 +21,14 @@ export type CoreServices =
 	| FileActions
 	| Envsec;
 
+/**
+ * Only the platform services the core uses. Not BunServices: its Terminal/Stdio attach to
+ * process.stdin, which has no business in the Electrobun Worker that runs the desktop app.
+ */
+const PlatformLayer = BunChildProcessSpawner.layer.pipe(Layer.provideMerge(Layer.mergeAll(BunFileSystem.layer, BunPath.layer)));
+
 /** Every core service, built on the given AppPaths (Bun platform services included). */
-export const makeCoreLayer = (paths: Layer.Layer<AppPaths, never, BunServices.BunServices>) => {
+export const makeCoreLayer = (paths: Layer.Layer<AppPaths, never, FileSystem.FileSystem | Path.Path>) => {
 	const base = Layer.mergeAll(paths, Scanner.layer);
 	const settings = Settings.layer.pipe(Layer.provideMerge(base));
 	const cache = CacheStore.layer.pipe(Layer.provideMerge(settings));
@@ -30,7 +36,7 @@ export const makeCoreLayer = (paths: Layer.Layer<AppPaths, never, BunServices.Bu
 	const actions = Layer.mergeAll(FileActions.layer.pipe(Layer.provideMerge(trash)), Envsec.layer);
 	return Layer.mergeAll(actions, Stats.layer, Cleanables.layer, EntryInfoReader.layer).pipe(
 		Layer.provideMerge(cache),
-		Layer.provide(BunServices.layer),
+		Layer.provide(PlatformLayer),
 	);
 };
 

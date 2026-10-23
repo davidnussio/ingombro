@@ -1,4 +1,4 @@
-import { Effect, Exit, Cause, Fiber, FiberHandle, Option } from "effect";
+import { Cause, Duration, Effect, Exit, Fiber, FiberHandle, Option } from "effect";
 import {
 	type AppSettings,
 	type CleanableResult,
@@ -116,7 +116,7 @@ export const makeRequestHandlers = Effect.fnUntraced(function* (send: WebviewSen
 				Effect.timed,
 				Effect.tap(([elapsed, { tree, progress }]) =>
 					Effect.log(
-						`[scan] Scan complete in ${elapsed.toString()} — dirs=${progress.dirs} files=${progress.files} treeSize=${tree.size}`,
+						`[scan] Scan complete in ${Duration.toMillis(elapsed).toFixed(0)}ms — dirs=${progress.dirs} files=${progress.files} treeSize=${tree.size}`,
 					),
 				),
 				// New scan: don't carry over old cleanables — they'll be re-detected
@@ -138,7 +138,7 @@ export const makeRequestHandlers = Effect.fnUntraced(function* (send: WebviewSen
 		if (!(yield* actions.isDirectory(resolved))) return { items: [], totalSize: 0 };
 		yield* Effect.log(`[cleanables] Scanning ${resolved}...`);
 		const [elapsed, result] = yield* Effect.timed(cleanables.detect(resolved));
-		yield* Effect.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${elapsed.toString()}`);
+		yield* Effect.log(`[cleanables] Found ${result.items.length} items (${result.totalSize} bytes) in ${Duration.toMillis(elapsed).toFixed(0)}ms`);
 		return result;
 	});
 

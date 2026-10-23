@@ -1,5 +1,4 @@
 import { ApplicationMenu, BrowserView, BrowserWindow, Screen } from "electrobun/bun";
-import { BunRuntime } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import { CoreLayer } from "../core";
 import { AppUpdater } from "./updater";
@@ -126,5 +125,13 @@ const DesktopApp = Layer.effectDiscard(
 	}),
 );
 
-// runMain handles SIGINT/SIGTERM: it interrupts the app (cancelling any active scan) and exits.
-DesktopApp.pipe(Layer.provide(Layer.mergeAll(CoreLayer, AppUpdaterLive)), Layer.launch, BunRuntime.runMain);
+// Electrobun runs this file in a Worker and its launcher owns the process: signals and exit are
+// handled on the main thread, so no runMain here (it would install signal handlers and call
+// process.exit from the Worker).
+Effect.runFork(
+	DesktopApp.pipe(
+		Layer.provide(Layer.mergeAll(CoreLayer, AppUpdaterLive)),
+		Layer.launch,
+		Effect.tapCause((cause) => Effect.logError("[ingombro] Desktop app failed:", cause)),
+	),
+);
