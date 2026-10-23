@@ -1,12 +1,15 @@
-import { readdirSync, statSync, type Dirent } from "fs";
+import { readdir } from "fs/promises";
+import { statSync, type Dirent } from "fs";
 import { basename, join } from "path";
 import { Clock, Context, Effect, Layer } from "effect";
 import type { DirEntry, ScanProgress } from "./types";
 
-// The walkers below read one directory per Effect step with the synchronous fs API.
-// Going through the async FileSystem service per entry is several times slower on
-// large trees; one effect per directory keeps the scan interruptible (cancel = interrupt
-// the fiber) and lets the runtime yield to the event loop so UIs stay responsive.
+// The walkers below list each directory asynchronously, then stat its entries synchronously.
+// Async stats per entry are several times slower on large trees; a synchronous listing,
+// however, can block the whole process for minutes when the OS stalls (cloud-backed or
+// privacy-protected folders), and then not even the cancel request gets through.
+// One step per directory keeps every walk interruptible (cancel = interrupt the fiber),
+// and `breathe` pauses regularly so Bun keeps serving I/O meanwhile.
 
 /** Real disk usage (`blocks * 512`), 0 if the entry vanished. */
 function diskUsage(fullPath: string): number {
@@ -14,26 +17,61 @@ function diskUsage(fullPath: string): number {
 	return stat ? (stat.blocks ?? 0) * 512 : 0;
 }
 
-function readDir(dirPath: string): Dirent[] {
-	try {
-		return readdirSync(dirPath, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-}
+/** Directory entries, empty when unreadable. */
+export const readDirEntries = (dirPath: string): Effect.Effect<Dirent[]> =>
+	Effect.promise(() => readdir(dirPath, { withFileTypes: true }).catch((): Dirent[] => []));
+
+/**
+ * Returns an effect that sleeps for 1ms when `intervalMs` has passed since the last pause.
+ * A synchronous stretch longer than that would block Bun from serving RPC/HTTP requests,
+ * including the one that cancels the walk.
+ */
+export const makeEventLoopBreather = (intervalMs = 50) => {
+	let last = Date.now();
+	return Effect.suspend(() => {
+		if (Date.now() - last < intervalMs) return Effect.void;
+		return Effect.sleep("1 millis").pipe(Effect.ensuring(Effect.sync(() => (last = Date.now()))));
+	});
+};
+
+/**
+ * Sum `visit` over every directory below (and including) `dirPath`, one directory per step.
+ * `visit` returns the size it found in that directory and pushes subdirectories to walk.
+ */
+const sumTree = (
+	dirPath: string,
+	visit: (dir: string, items: Dirent[], push: (sub: string) => void) => number,
+	breathe: Effect.Effect<void>,
+) =>
+	Effect.gen(function* () {
+		let total = 0;
+		const stack = [dirPath];
+		while (stack.length > 0) {
+			const dir = stack.pop()!;
+			const items = yield* readDirEntries(dir);
+			total += yield* Effect.sync(() => visit(dir, items, (sub) => stack.push(sub)));
+			yield* breathe;
+		}
+		return total;
+	});
 
 /** Full recursive size (includes hidden entries). */
-function dirSizeSync(dirPath: string): number {
-	let total = 0;
-	for (const item of readDir(dirPath)) {
-		try {
-			const fullPath = join(dirPath, item.name);
-			if (item.isFile() || item.isSymbolicLink()) total += diskUsage(fullPath);
-			else if (item.isDirectory()) total += dirSizeSync(fullPath);
-		} catch {}
-	}
-	return total;
-}
+const dirSize = (dirPath: string) =>
+	sumTree(
+		dirPath,
+		(dir, items, push) => {
+			let total = 0;
+			for (const item of items) {
+				try {
+					const fullPath = join(dir, item.name);
+					if (item.isFile() || item.isSymbolicLink()) total += diskUsage(fullPath);
+					else if (item.isDirectory()) push(fullPath);
+				} catch {}
+			}
+			return total;
+		},
+		makeEventLoopBreather(),
+	);
 
 export interface ScanOptions {
 	readonly maxDepth?: number;
@@ -49,7 +87,8 @@ export interface ScanResult {
 
 /**
  * Recursive directory scanner. Sizes use `blocks * 512` (real disk usage).
- * Hidden entries, node_modules and .Trash are skipped. Interrupting the fiber cancels a scan.
+ * Hidden folders and node_modules are summed but not explored (leaves without children), so totals
+ * match real disk usage; .Trash is skipped. Interrupting the fiber cancels a scan.
  */
 export class Scanner extends Context.Service<
 	Scanner,
@@ -68,6 +107,7 @@ export class Scanner extends Context.Service<
 				const maxDepth = options.maxDepth ?? 10;
 				const interval = options.progressIntervalMs ?? 100;
 				const progress = { dirs: 0, files: 0, currentDir: rootPath };
+				const breathe = makeEventLoopBreather();
 				let lastReport = 0;
 
 				const report = Effect.gen(function* () {
@@ -78,47 +118,50 @@ export class Scanner extends Context.Service<
 					yield* options.onProgress({ ...progress });
 				});
 
-				function shallowSize(dirPath: string): number {
-					let total = 0;
-					for (const item of readDir(dirPath)) {
-						if (item.name.startsWith(".")) continue;
-						try {
-							const fullPath = join(dirPath, item.name);
-							if (item.isFile()) {
-								total += diskUsage(fullPath);
-								progress.files++;
-							} else if (item.isDirectory()) {
-								total += shallowSize(fullPath);
-								progress.dirs++;
+				// Folders below maxDepth, hidden folders and node_modules are only summed (no tree nodes)
+				const summarize = (dirPath: string) =>
+					sumTree(
+						dirPath,
+						(dir, items, push) => {
+							let total = 0;
+							for (const item of items) {
+								try {
+									const fullPath = join(dir, item.name);
+									if (item.isFile()) {
+										total += diskUsage(fullPath);
+										progress.files++;
+									} else if (item.isDirectory()) {
+										push(fullPath);
+										progress.dirs++;
+									}
+								} catch {}
 							}
-						} catch {}
-					}
-					return total;
-				}
+							return total;
+						},
+						breathe,
+					);
 
 				const walk = (dirPath: string, depth: number): Effect.Effect<DirEntry> =>
 					Effect.gen(function* () {
 						progress.dirs++;
 						progress.currentDir = dirPath;
 						yield* report;
+						yield* breathe;
 
 						const children: DirEntry[] = [];
 						let size = 0;
 						const subdirs: string[] = [];
+						const summarized: { path: string; name: string }[] = [];
+						const items = yield* readDirEntries(dirPath);
 						yield* Effect.sync(() => {
-							for (const item of readDir(dirPath)) {
-								if (item.name.startsWith(".") || item.name === "node_modules" || item.name === ".Trash") continue;
+							for (const item of items) {
+								if (item.name === ".Trash") continue;
 								const fullPath = join(dirPath, item.name);
 								try {
 									if (item.isDirectory()) {
-										if (depth < maxDepth) {
-											subdirs.push(fullPath);
-										} else {
-											const dirSize = shallowSize(fullPath);
-											children.push({ path: fullPath, name: item.name, size: dirSize, isDir: true });
-											size += dirSize;
-											progress.dirs++;
-										}
+										const opaque = item.name.startsWith(".") || item.name === "node_modules";
+										if (depth < maxDepth && !opaque) subdirs.push(fullPath);
+										else summarized.push({ path: fullPath, name: item.name });
 									} else if (item.isFile()) {
 										const fileSize = diskUsage(fullPath);
 										children.push({ path: fullPath, name: item.name, size: fileSize, isDir: false });
@@ -128,6 +171,12 @@ export class Scanner extends Context.Service<
 								} catch {}
 							}
 						});
+						for (const dir of summarized) {
+							const dirSize = yield* summarize(dir.path);
+							children.push({ ...dir, size: dirSize, isDir: true });
+							size += dirSize;
+							progress.dirs++;
+						}
 						for (const sub of subdirs) {
 							const child = yield* walk(sub, depth + 1);
 							children.push(child);
@@ -140,12 +189,12 @@ export class Scanner extends Context.Service<
 				const tree = yield* walk(rootPath, 0);
 				return { tree, progress: { ...progress } };
 			}),
-			dirSize: (dirPath) => Effect.sync(() => dirSizeSync(dirPath)),
+			dirSize,
 			pathSize: (path) =>
-				Effect.sync(() => {
+				Effect.suspend(() => {
 					const stat = statSync(path, { throwIfNoEntry: false });
-					if (!stat) return 0;
-					return stat.isDirectory() ? dirSizeSync(path) : (stat.blocks ?? 0) * 512;
+					if (!stat) return Effect.succeed(0);
+					return stat.isDirectory() ? dirSize(path) : Effect.succeed((stat.blocks ?? 0) * 512);
 				}),
 		}),
 	);

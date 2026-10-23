@@ -111,13 +111,16 @@ describe("services", () => {
 		expect(s).toEqual({ maxCacheEntries: 10, deleteMode: "permanent", maxDepth: 10 });
 	});
 
-	test("scan builds a sorted tree and skips hidden + node_modules", async () => {
+	test("scan builds a sorted tree; hidden folders and node_modules are summed, not explored", async () => {
 		const { tree, progress } = await run(Scanner.use((s) => s.scan(scanRoot)));
 		const sizes = tree.children!.map((c) => c.size);
 		expect(sizes).toEqual(sizes.toSorted((a, b) => b - a));
 		expect(tree.children!.map((c) => c.name).sort()).toEqual(["constructor", "docs", "proj", "toString"]);
-		expect(findNode(tree, join(scanRoot, "proj/node_modules"))).toBeUndefined();
-		expect(findNode(tree, join(scanRoot, "proj/.env"))).toBeUndefined();
+		const nodeModules = findNode(tree, join(scanRoot, "proj/node_modules"))!;
+		expect(nodeModules.isDir).toBe(true);
+		expect(nodeModules.children).toBeUndefined();
+		expect(nodeModules.size).toBe(await run(Scanner.use((s) => s.dirSize(join(scanRoot, "proj/node_modules")))));
+		expect(findNode(tree, join(scanRoot, "proj/.env"))?.isDir).toBe(false);
 		expect(tree.size).toBe(tree.children!.reduce((s, c) => s + c.size, 0));
 		expect(progress.files).toBeGreaterThan(0);
 	});
@@ -135,6 +138,25 @@ describe("services", () => {
 			}),
 		);
 		expect(Exit.hasInterrupts(exit)).toBe(true);
+	});
+
+	test("a long scan keeps serving I/O (so a cancel request can arrive)", async () => {
+		// Everything below maxDepth is only summed: one big subtree to walk
+		const wide = join(root, "wide");
+		for (let i = 0; i < 4000; i++) mkdirSync(join(wide, "deep", `d${i}`, "sub"), { recursive: true });
+		const server = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+		try {
+			let answeredAt = 0;
+			const scan = run(Scanner.use((s) => s.scan(wide, { maxDepth: 0 })));
+			await Bun.sleep(5);
+			const request = fetch(server.url).then(() => (answeredAt = performance.now()));
+			await scan;
+			const scanDoneAt = performance.now();
+			await request;
+			expect(answeredAt).toBeLessThan(scanDoneAt);
+		} finally {
+			server.stop(true);
+		}
 	});
 
 	test("cache upsert, cleanables and prune round-trip through gzip", async () => {

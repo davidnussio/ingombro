@@ -1,7 +1,7 @@
-import { readdirSync, readFileSync, statSync, type Dirent } from "fs";
+import { readFileSync, statSync, type Dirent } from "fs";
 import { extname, join } from "path";
 import { Context, Effect, Layer } from "effect";
-import { Scanner } from "./scanner";
+import { Scanner, makeEventLoopBreather, readDirEntries } from "./scanner";
 import type { Category, CleanableItem, CleanableResult, RiskLevel } from "./types";
 
 // --- Smart Clean: cleanable folder detection ---
@@ -251,16 +251,10 @@ export class Cleanables extends Context.Service<
 			const scanner = yield* Scanner;
 
 			/** Classify one directory's entries (sync, one fs pass). */
-			function inspect(dirPath: string) {
+			function inspect(dirPath: string, entries: Dirent[]) {
 				const found: CleanableItem[] = [];
 				const toSize: Pending[] = [];
 				const recurse: string[] = [];
-				let entries: Dirent[];
-				try {
-					entries = readdirSync(dirPath, { withFileTypes: true });
-				} catch {
-					return { found, toSize, recurse };
-				}
 				for (const entry of entries) {
 					if (entry.name === ".Trash") continue;
 					const fullPath = join(dirPath, entry.name);
@@ -367,12 +361,15 @@ export class Cleanables extends Context.Service<
 			const detect = Effect.fn("Cleanables.detect")(function* (rootPath: string, options: DetectOptions = {}) {
 				const maxDepth = options.maxDepth ?? 8;
 				const items: CleanableItem[] = [];
+				const breathe = makeEventLoopBreather();
 
 				const walk = (dirPath: string, depth: number): Effect.Effect<void> =>
 					Effect.gen(function* () {
 						if (depth > maxDepth) return;
 						if (options.onDir) yield* options.onDir(dirPath);
-						const { found, toSize, recurse } = yield* Effect.sync(() => inspect(dirPath));
+						yield* breathe;
+						const entries = yield* readDirEntries(dirPath);
+						const { found, toSize, recurse } = yield* Effect.sync(() => inspect(dirPath, entries));
 						items.push(...found);
 						for (const pending of toSize) {
 							const size = yield* scanner.dirSize(pending.path);
