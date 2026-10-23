@@ -111,6 +111,26 @@ export interface Translations {
 	statsTotal: string;
 	statsNoData: string;
 
+	// Redesigned shell
+	startTitle: string;
+	newScan: string;
+	recentScans: string;
+	noRecentScans: string;
+	quickPicks: string;
+	homeFolder: string;
+	nameColumn: string;
+	showInfo: string;
+	riskLow: string;
+	riskMedium: string;
+	riskHigh: string;
+	deleteModeTrashHint: string;
+	deleteModePermanentHint: string;
+	scanDepthHint: string;
+	maxCacheHint: string;
+	cleanCalloutSub: string;
+	moveToTrash: string;
+	scanningCounts: (dirs: string, files: string) => string;
+
 	// Updates
 	updateAvailableText?: (version: string) => string;
 	updateReadyText?: (version: string) => string;

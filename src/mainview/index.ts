@@ -53,7 +53,7 @@ type AppRPC = {
 			scanDirectory: { params: { dirPath: string }; response: { success: boolean; rootPath?: string; error?: string } };
 			getChildren: { params: { dirPath: string }; response: { children: DirEntry[] } };
 			deleteEntry: { params: { entryPath: string }; response: { success: boolean; error?: string; rootPath?: string } };
-			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number }[] } };
+			getCacheList: { params: {}; response: { entries: { rootPath: string; timestamp: number; size: number }[] } };
 			deleteCacheEntry: { params: { rootPath: string }; response: { success: boolean } };
 			listDir: { params: { partial: string }; response: { suggestions: string[] } };
 			validatePath: { params: { dirPath: string }; response: { valid: boolean } };
@@ -82,7 +82,7 @@ type AppRPC = {
 	webview: {
 		requests: {};
 		messages: {
-			scanProgress: { currentDir: string };
+			scanProgress: { currentDir: string; dirs: number; files: number };
 			error: { message: string };
 			updateAvailable: { version: string };
 			updateReady: { version: string };
@@ -212,16 +212,12 @@ const rpc = Electroview.defineRPC<AppRPC>({
 	handlers: {
 		requests: {},
 		messages: {
-			scanProgress: ({ currentDir }) => {
-				const dirEl = document.getElementById("scanCurrentDir");
-				if (dirEl) {
-					const maxLen = 60;
-					if (currentDir.length > maxLen) {
-						dirEl.textContent = "…" + currentDir.slice(-(maxLen - 1));
-					} else {
-						dirEl.textContent = currentDir;
-					}
-				}
+			scanProgress: ({ currentDir, dirs, files }) => {
+				const number = new Intl.NumberFormat(getLocale());
+				// The element is right-to-left so long paths keep their tail visible; the
+				// LRM marks stop a leading "/" from jumping to the end.
+				$("scanCurrentDir").textContent = `\u200E${currentDir}\u200E`;
+				$("scanCounts").textContent = t().scanningCounts(number.format(dirs), number.format(files));
 			},
 			error: ({ message }) => run(onBackendErrorMessage(message)),
 			updateAvailable: ({ version }) =>
@@ -311,49 +307,31 @@ let envsecAvailable: boolean | null = null; // null = not checked yet
 
 // --- Update banner ---
 function showUpdateBanner(version: string) {
-	let banner = document.getElementById("updateBanner");
-	if (!banner) {
-		banner = document.createElement("div");
-		banner.id = "updateBanner";
-		banner.style.cssText = "position:fixed;top:38px;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:#1a3a2a;color:#4ade80;font-size:13px;border-bottom:1px solid #2d5a3d;-webkit-app-region:no-drag;";
-		document.body.prepend(banner);
-	}
-	banner.innerHTML = `
-		<span>🚀 ${t().updateAvailableText?.(version) ?? `Version ${version} is available`}</span>
-		<button id="updateDownloadBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateDownload ?? "Download"}</button>
-		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
-	`;
-	document.getElementById("updateDownloadBtn")!.onclick = () => {
-		const btn = document.getElementById("updateDownloadBtn") as HTMLButtonElement;
-		btn.textContent = t().updateDownloading ?? "Downloading…";
-		btn.disabled = true;
-		btn.style.opacity = "0.6";
+	const tr = t();
+	$("updateBannerText").textContent = tr.updateAvailableText?.(version) ?? `Version ${version} is available`;
+	const action = $("updateBannerAction") as HTMLButtonElement;
+	action.textContent = tr.updateDownload ?? "Download";
+	action.disabled = false;
+	action.onclick = () => {
+		action.textContent = tr.updateDownloading ?? "Downloading…";
+		action.disabled = true;
 		run(Backend.use((backend) => backend.downloadUpdate({})).pipe(logFailure("[fe] downloadUpdate error:")));
 	};
-	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
+	$("updateBanner").classList.remove("hidden");
 }
 
 function showUpdateReadyBanner(version: string) {
-	let banner = document.getElementById("updateBanner");
-	if (!banner) {
-		banner = document.createElement("div");
-		banner.id = "updateBanner";
-		banner.style.cssText = "position:fixed;top:38px;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 16px;background:#1a3a2a;color:#4ade80;font-size:13px;border-bottom:1px solid #2d5a3d;-webkit-app-region:no-drag;";
-		document.body.prepend(banner);
-	}
-	banner.innerHTML = `
-		<span>✅ ${t().updateReadyText?.(version) ?? `Version ${version} is ready to install`}</span>
-		<button id="updateApplyBtn" style="background:#22c55e;color:#000;border:none;border-radius:6px;padding:4px 14px;font-size:12px;font-weight:600;cursor:pointer;">${t().updateInstall ?? "Restart & Update"}</button>
-		<button id="updateDismissBtn" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
-	`;
-	document.getElementById("updateApplyBtn")!.onclick = () => {
-		run(Backend.use((backend) => backend.applyUpdate({})).pipe(logFailure("[fe] applyUpdate error:")));
-	};
-	document.getElementById("updateDismissBtn")!.onclick = () => hideUpdateBanner();
+	const tr = t();
+	$("updateBannerText").textContent = tr.updateReadyText?.(version) ?? `Version ${version} is ready to install`;
+	const action = $("updateBannerAction") as HTMLButtonElement;
+	action.textContent = tr.updateInstall ?? "Restart & Update";
+	action.disabled = false;
+	action.onclick = () => run(Backend.use((backend) => backend.applyUpdate({})).pipe(logFailure("[fe] applyUpdate error:")));
+	$("updateBanner").classList.remove("hidden");
 }
 
 function hideUpdateBanner() {
-	document.getElementById("updateBanner")?.remove();
+	$("updateBanner").classList.add("hidden");
 }
 
 // Returns cleanables scoped to the current navigation path
@@ -374,10 +352,18 @@ function updateCleanBanner() {
 		banner.classList.add("hidden");
 		return;
 	}
+	showCleanCallout(scoped);
+}
+
+/** The Smart Clean callout above the treemap, either analyzing or showing the result. */
+function showCleanCallout(result: CleanableResult | "analyzing") {
+	const banner = $("cleanBanner");
 	banner.classList.remove("hidden");
-	banner.classList.remove("clean-banner-scanning");
-	$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(scoped.totalSize), scoped.items.length);
-	$("btnOpenClean").classList.remove("hidden");
+	const analyzing = result === "analyzing";
+	banner.classList.toggle("is-analyzing", analyzing);
+	$("cleanBannerMsg").textContent = analyzing ? t().cleanAnalyzing : t().cleanRecoverable(formatSize(result.totalSize), result.items.length);
+	$("cleanBannerSub").textContent = analyzing ? "" : t().cleanCalloutSub;
+	$("btnOpenClean").classList.toggle("hidden", analyzing);
 }
 
 // --- Cancel scan ---
@@ -407,8 +393,12 @@ const goToWelcome = Effect.fnUntraced(function* () {
 // --- Scan helper ---
 const startScan = Effect.fn("startScan")(
 	function* (dirPath: string) {
-		yield* showScreen("scanning");
+		$("scanTarget").textContent = dirPath;
+		$("scanCounts").textContent = "";
+		$("scanCurrentDir").textContent = "";
 		isScanning = true;
+		yield* showScreen("scanning");
+		setTitle(dirPath);
 		yield* Effect.log(`[fe] startScan: requesting scanDirectory dirPath="${dirPath}"`);
 		const backend = yield* Backend;
 		const result = yield* backend.scanDirectory({ dirPath });
@@ -424,6 +414,7 @@ const startScan = Effect.fn("startScan")(
 			return;
 		}
 		yield* loadTreeFromCache(result.rootPath, false);
+		yield* background(renderCacheList());
 		yield* background(detectAndShowCleanables(result.rootPath, false));
 	},
 	Effect.catchTag("BackendError", (e) =>
@@ -472,6 +463,7 @@ const loadTreeFromCache = Effect.fn("loadTreeFromCache")(function* (rootPath: st
 		navigationStack = [tree];
 		yield* showScreen("results");
 		renderResults(tree);
+		$("dirList").focus({ preventScroll: true });
 	}
 });
 
@@ -483,20 +475,15 @@ const scanPathInput = $("scanPath") as HTMLInputElement;
 const showScreen = Effect.fnUntraced(function* (name: "welcome" | "scanning" | "results") {
 	document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
 	$(`screen-${name}`).classList.add("active");
-	const settings = $("settingsSection");
 	if (name === "welcome") {
-		settings.classList.remove("hidden");
-		$("settingsTab").classList.remove("hidden");
 		$("cleanBanner").classList.add("hidden");
 		currentCleanables = null;
+		currentTree = null;
+		navigationStack = [];
+		setTitle(null);
 		yield* inSlot("stats", renderStatsWidget());
-	} else {
-		settings.classList.add("hidden");
-		settings.classList.remove("settings-open");
-		$("settingsTab").classList.add("hidden");
-		$("settingsTab").classList.remove("settings-tab-hidden");
-		$("settingsOverlayBackdrop").classList.remove("visible");
 	}
+	syncActiveRecent();
 });
 
 // --- Format size ---
@@ -512,14 +499,23 @@ function formatSize(bytes: number): string {
 }
 
 // --- Color palette for treemap ---
+// Mid-tone hues that keep white labels readable on both light and dark backgrounds.
 const COLORS = [
-	"#6c5ce7", "#00b894", "#e17055", "#0984e3", "#fdcb6e",
-	"#e84393", "#00cec9", "#d63031", "#74b9ff", "#55efc4",
-	"#fab1a0", "#a29bfe", "#81ecec", "#ffeaa7", "#dfe6e9",
+	"#7c6cf6", "#22a98f", "#ec7550", "#4888f0", "#d99a2b",
+	"#dd5f97", "#2aa9bd", "#68a945", "#a46be0", "#7d8aa3",
 ];
 
 function getColor(index: number): string {
 	return COLORS[index % COLORS.length]!;
+}
+
+/** Folders get a palette color by rank, files a neutral tone. */
+function swatch(entry: DirEntry, index: number): string {
+	return entry.isDir ? getColor(index) : cssVar("--tm-file");
+}
+
+function cssVar(name: string): string {
+	return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 // --- Treemap rendering with Canvas ---
@@ -547,7 +543,7 @@ function layoutStrip(
 ) {
 	if (entries.length === 0 || totalSize === 0) return;
 	if (entries.length === 1) {
-		rects.push({ x, y, w, h, entry: entries[0]!, color: getColor(rects.length) });
+		rects.push({ x, y, w, h, entry: entries[0]!, color: swatch(entries[0]!, rects.length) });
 		return;
 	}
 
@@ -590,7 +586,7 @@ function layoutStrip(
 		for (const e of stripEntries) {
 			const eFraction = e.size / stripSize;
 			const eH = h * eFraction;
-			rects.push({ x: cx, y: cy, w: stripW, h: eH, entry: e, color: getColor(rects.length) });
+			rects.push({ x: cx, y: cy, w: stripW, h: eH, entry: e, color: swatch(e, rects.length) });
 			cy += eH;
 		}
 		const remaining = entries.slice(stripEntries.length);
@@ -600,7 +596,7 @@ function layoutStrip(
 		for (const e of stripEntries) {
 			const eFraction = e.size / stripSize;
 			const eW = w * eFraction;
-			rects.push({ x: cx, y: cy, w: eW, h: stripH, entry: e, color: getColor(rects.length) });
+			rects.push({ x: cx, y: cy, w: eW, h: stripH, entry: e, color: swatch(e, rects.length) });
 			cx += eW;
 		}
 		const remaining = entries.slice(stripEntries.length);
@@ -611,50 +607,57 @@ function layoutStrip(
 let treemapRects: TreemapRect[] = [];
 let treemapAnimId: number | null = null;
 let skipNextAnimation = false;
+let hoveredRect: TreemapRect | null = null;
 
-function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number, canvasW?: number, canvasH?: number) {
-	const pad = 2;
-	const containerR = 12;
-	const innerR = containerR - pad;
-	const defaultR = 4;
-	const edgeTolerance = 1;
+function drawTreemapFrame(ctx: CanvasRenderingContext2D, rects: TreemapRect[], alpha: number, _canvasW?: number, _canvasH?: number) {
+	const gap = 1.5;
+	const radius = 6;
+	const label = cssVar("--tm-label");
+	const sub = cssVar("--tm-sub");
 
 	for (const r of rects) {
-		ctx.fillStyle = r.color;
-		ctx.globalAlpha = 0.85 * alpha;
+		const x = r.x + gap;
+		const y = r.y + gap;
+		const w = r.w - gap * 2;
+		const h = r.h - gap * 2;
+		if (w <= 0 || h <= 0) continue;
+		const hovered = r === hoveredRect;
 
-		const w = canvasW || 9999;
-		const h = canvasH || 9999;
-		const touchTop = r.y <= pad + edgeTolerance;
-		const touchLeft = r.x <= pad + edgeTolerance;
-		const touchBottom = (r.y + r.h) >= h - pad - edgeTolerance;
-		const touchRight = (r.x + r.w) >= w - pad - edgeTolerance;
-
-		const radii: [number, number, number, number] = [
-			(touchTop && touchLeft) ? innerR : defaultR,
-			(touchTop && touchRight) ? innerR : defaultR,
-			(touchBottom && touchRight) ? innerR : defaultR,
-			(touchBottom && touchLeft) ? innerR : defaultR,
-		];
-
-		roundRect(ctx, r.x, r.y, r.w - 1.5, r.h - 1.5, radii);
-		ctx.fill();
 		ctx.globalAlpha = alpha;
+		ctx.fillStyle = r.color;
+		roundRect(ctx, x, y, w, h, Math.min(radius, w / 2, h / 2));
+		ctx.fill();
+		if (hovered) {
+			ctx.fillStyle = "rgba(255,255,255,0.16)";
+			ctx.fill();
+			ctx.lineWidth = 2;
+			ctx.strokeStyle = "rgba(255,255,255,0.85)";
+			roundRect(ctx, x + 1, y + 1, w - 2, h - 2, Math.min(radius - 1, w / 2, h / 2));
+			ctx.stroke();
+		}
 
-		if (r.w > 50 && r.h > 28) {
-			ctx.fillStyle = `rgba(255,255,255,${0.9 * alpha})`;
-			ctx.font = "600 11px -apple-system, system-ui, sans-serif";
-			const label = truncateText(ctx, r.entry.name, r.w - 12);
-			ctx.fillText(label, r.x + 6, r.y + 16);
-
-			if (r.h > 40) {
-				ctx.fillStyle = `rgba(255,255,255,${0.55 * alpha})`;
-				ctx.font = "10px -apple-system, system-ui, sans-serif";
-				ctx.fillText(formatSize(r.entry.size), r.x + 6, r.y + 30);
+		if (w > 54 && h > 30) {
+			ctx.fillStyle = label;
+			ctx.font = "600 12px -apple-system, system-ui, sans-serif";
+			ctx.fillText(truncateText(ctx, r.entry.name, w - 16), x + 8, y + 18);
+			if (h > 46) {
+				ctx.fillStyle = sub;
+				ctx.font = "500 11px -apple-system, system-ui, sans-serif";
+				ctx.fillText(formatSize(r.entry.size), x + 8, y + 33);
 			}
 		}
 	}
 	ctx.globalAlpha = 1;
+}
+
+/** Repaint in place (hover changes, theme switches) without the enter animation. */
+function redrawTreemap() {
+	const canvas = document.getElementById("treemapCanvas") as HTMLCanvasElement;
+	const ctx = canvas.getContext("2d")!;
+	const dpr = window.devicePixelRatio || 1;
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	drawTreemapFrame(ctx, treemapRects, 1);
 }
 
 function renderTreemap(entries: DirEntry[]) {
@@ -682,6 +685,7 @@ function renderTreemap(entries: DirEntry[]) {
 	const ctx = canvas.getContext("2d")!;
 
 	const topEntries = entries.filter((e) => e.size > 0).slice(0, 40);
+	hoveredRect = null;
 	treemapRects = squarify(topEntries, 2, 2, rect.width - 4, rect.height - 4);
 
 	if (!shouldAnimate) {
@@ -768,12 +772,16 @@ treemapCanvas.addEventListener("mousemove", (e) => {
 	const mx = e.clientX - rect.left;
 	const my = e.clientY - rect.top;
 	const hit = treemapRects.find((r) => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h);
+	if (hit !== hoveredRect) {
+		hoveredRect = hit ?? null;
+		if (!treemapAnimId) redrawTreemap();
+	}
 	if (hit) {
 		tooltip.classList.remove("hidden");
 		tooltip.querySelector(".tt-name")!.textContent = hit.entry.name;
 		tooltip.querySelector(".tt-size")!.textContent = formatSize(hit.entry.size);
-		const tx = Math.min(e.clientX - rect.left + 12, rect.width - 160);
-		const ty = Math.min(e.clientY - rect.top + 12, rect.height - 50);
+		const tx = Math.min(e.clientX - rect.left + 14, rect.width - tooltip.offsetWidth - 8);
+		const ty = Math.min(e.clientY - rect.top + 14, rect.height - tooltip.offsetHeight - 8);
 		tooltip.style.left = tx + "px";
 		tooltip.style.top = ty + "px";
 	} else {
@@ -783,6 +791,10 @@ treemapCanvas.addEventListener("mousemove", (e) => {
 
 treemapCanvas.addEventListener("mouseleave", () => {
 	tooltip.classList.add("hidden");
+	if (hoveredRect) {
+		hoveredRect = null;
+		if (!treemapAnimId) redrawTreemap();
+	}
 });
 
 // Drill down into a directory, loading its children first if they are not cached yet.
@@ -795,6 +807,8 @@ const navigateInto = Effect.fn("navigateInto")(
 				entry.children = res.children;
 				entry.size = res.children.reduce((s: number, c: DirEntry) => s + c.size, 0);
 			} else {
+				// Summed but not explored (node_modules, hidden folders, beyond max depth): show its details
+				yield* inSlot("infoPanel", openInfoPanel(entry.path, entry.size));
 				return;
 			}
 		}
@@ -815,33 +829,33 @@ treemapCanvas.addEventListener("click", (e) => {
 });
 
 // --- Render results ---
+const ICON = (id: string, cls = "") => `<svg class="icon ${cls}"><use href="#i-${id}" /></svg>`;
+
 function renderBreadcrumb() {
 	const nav = $("breadcrumb");
 	nav.innerHTML = "";
-	for (let i = 0; i < navigationStack.length; i++) {
-		if (i > 0) {
-			const sep = document.createElement("span");
-			sep.className = "breadcrumb-sep";
-			sep.textContent = "›";
-			nav.appendChild(sep);
-		}
-		const crumb = document.createElement("span");
-		crumb.className = "breadcrumb-item" + (i === navigationStack.length - 1 ? " current" : "");
-		crumb.textContent = navigationStack[i]!.name;
-		crumb.title = navigationStack[i]!.path;
-		if (i < navigationStack.length - 1) {
-			const idx = i;
+	navigationStack.forEach((entry, i) => {
+		if (i > 0) nav.insertAdjacentHTML("beforeend", ICON("chevron", "breadcrumb-sep"));
+		const isCurrent = i === navigationStack.length - 1;
+		const crumb = document.createElement(isCurrent ? "span" : "button");
+		crumb.className = "breadcrumb-item" + (isCurrent ? " current" : "");
+		crumb.textContent = entry.name;
+		crumb.title = entry.path;
+		if (!isCurrent) {
 			crumb.addEventListener("click", () => {
-				navigationStack = navigationStack.slice(0, idx + 1);
+				navigationStack = navigationStack.slice(0, i + 1);
 				renderResults(navigationStack[navigationStack.length - 1]!);
 			});
 		}
 		nav.appendChild(crumb);
-	}
+	});
+	// Keep the current folder in view when the path is deep
+	nav.scrollLeft = nav.scrollWidth;
 }
 
 function renderResults(entry: DirEntry) {
 	$("totalSize").textContent = formatSize(entry.size);
+	setTitle(entry.path);
 	renderBreadcrumb();
 
 	const children = (entry.children || []).filter((c) => c.size > 0);
@@ -850,72 +864,94 @@ function renderResults(entry: DirEntry) {
 	updateCleanBanner();
 }
 
+// --- Directory list (keyboard navigable) ---
+let listEntries: DirEntry[] = [];
+let selectedIndex = -1;
+
 function renderDirList(entries: DirEntry[], parentSize: number) {
 	const list = $("dirList");
+	const tr = t();
 	list.innerHTML = "";
+	listEntries = entries;
+	selectedIndex = -1;
+	list.scrollTop = 0;
 
-	for (const entry of entries) {
+	entries.forEach((entry, index) => {
 		const pct = parentSize > 0 ? (entry.size / parentSize) * 100 : 0;
-		const colorIdx = entries.indexOf(entry);
 		const item = document.createElement("div");
-		item.className = "dir-item";
-		const infoIcon = `<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
-		const dirIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
-		const fileIcon = `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
-		const trashIcon = `<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+		item.className = "dir-item" + (entry.isDir ? " is-dir" : "");
+		item.setAttribute("role", "option");
+		item.title = entry.path;
+		item.style.setProperty("--swatch", swatch(entry, index));
 		item.innerHTML = `
-			<div class="dir-item-icon">${entry.isDir ? dirIcon : fileIcon}</div>
-			<div class="dir-item-info">
-				<div class="dir-item-name">${escapeHtml(entry.name)}</div>
-				<div class="dir-item-path">${escapeHtml(entry.path)}</div>
-			</div>
-			<div class="dir-item-bar">
-				<div class="dir-item-bar-fill" style="width:${pct}%;background:${getColor(colorIdx)}"></div>
-			</div>
+			<div class="dir-item-icon">${entry.isDir ? ICON("folder", "is-dir") : ICON("file", "is-file")}</div>
+			<div class="dir-item-name">${escapeHtml(entry.name)}</div>
+			${entry.children?.length ? ICON("chevron", "dir-item-chevron") : ""}
+			<div class="dir-item-bar"><div class="dir-item-bar-fill" style="width:${pct}%"></div></div>
+			<div class="dir-item-pct">${pct >= 1 ? Math.round(pct) : "<1"}%</div>
 			<div class="dir-item-size">${formatSize(entry.size)}</div>
 			<div class="dir-item-actions">
-				<button class="btn-info" data-path="${escapeAttr(entry.path)}" title="Info">${infoIcon}</button>
-				<button class="btn-delete" data-path="${escapeAttr(entry.path)}" data-name="${escapeAttr(entry.name)}" data-size="${entry.size}">${trashIcon}</button>
+				<button class="icon-btn" data-action="info" title="${escapeAttr(tr.showInfo)} (Space)">${ICON("info")}</button>
+				<button class="icon-btn" data-action="reveal" title="${escapeAttr(tr.revealInFinder)}">${ICON("reveal")}</button>
+				<button class="icon-btn icon-btn-danger" data-action="delete" title="${escapeAttr(tr.deleteButton)} (⌘⌫)">${ICON("trash")}</button>
 			</div>
 		`;
-
-		if (entry.isDir) {
-			item.addEventListener("click", (e) => {
-				if ((e.target as HTMLElement).classList.contains("btn-delete")) return;
-				run(navigateInto(entry));
-			});
-			item.style.cursor = "pointer";
-		}
-
+		item.addEventListener("click", (e) => {
+			const action = (e.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action;
+			selectRow(index);
+			if (action === "info") run(inSlot("infoPanel", openInfoPanel(entry.path, entry.size)));
+			else if (action === "reveal") revealPath(entry.path);
+			else if (action === "delete") promptDelete(entry);
+			else if (entry.isDir) run(navigateInto(entry));
+		});
 		list.appendChild(item);
+	});
+}
+
+function selectRow(index: number) {
+	const rows = $("dirList").children;
+	rows[selectedIndex]?.classList.remove("selected");
+	selectedIndex = Math.max(0, Math.min(index, listEntries.length - 1));
+	const row = rows[selectedIndex];
+	row?.classList.add("selected");
+	row?.scrollIntoView({ block: "nearest" });
+}
+
+$("dirList").addEventListener("keydown", (e) => {
+	if (listEntries.length === 0) return;
+	const entry = listEntries[selectedIndex];
+	if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+		e.preventDefault();
+		selectRow(selectedIndex < 0 ? 0 : selectedIndex + (e.key === "ArrowDown" ? 1 : -1));
+	} else if ((e.key === "Enter" || e.key === "ArrowRight") && entry?.isDir) {
+		e.preventDefault();
+		run(navigateInto(entry));
+	} else if ((e.key === " " || e.key === "i") && entry) {
+		e.preventDefault();
+		run(inSlot("infoPanel", openInfoPanel(entry.path, entry.size)));
+	} else if ((e.key === "Delete" || (e.key === "Backspace" && e.metaKey)) && entry) {
+		e.preventDefault();
+		e.stopPropagation();
+		promptDelete(entry);
 	}
+});
 
-	// Delete buttons
-	list.querySelectorAll(".btn-delete").forEach((btn) => {
-		btn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			const el = e.currentTarget as HTMLElement;
-			pendingDeletePath = el.dataset.path || null;
-			pendingDeleteSize = Number(el.dataset.size || 0);
-			const name = el.dataset.name || "";
-			const size = pendingDeleteSize;
-			const isTrash = settingDeleteMode.value === "trash";
-			$("deleteMessage").textContent = isTrash
-				? t().deleteConfirmMessageTrash(name, formatSize(size))
-				: t().deleteConfirmMessage(name, formatSize(size));
-			$("modal-delete").classList.remove("hidden");
-		});
-	});
+function revealPath(path: string) {
+	run(Backend.use((backend) => backend.revealInFinder({ filePath: path })).pipe(logFailure("[fe] revealInFinder error:")));
+}
 
-	// Info buttons
-	list.querySelectorAll(".btn-info").forEach((btn) => {
-		btn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			const el = e.currentTarget as HTMLElement;
-			const path = el.dataset.path;
-			if (path) run(inSlot("infoPanel", openInfoPanel(path)));
-		});
-	});
+/** Ask before deleting a single entry (moved to Trash or deleted, per settings). */
+function promptDelete(entry: { path: string; name: string; size: number }) {
+	const tr = t();
+	pendingDeletePath = entry.path;
+	pendingDeleteSize = entry.size;
+	const isTrash = settingDeleteMode.value === "trash";
+	$("deleteModalTitle").textContent = isTrash ? tr.moveToTrash : tr.deleteConfirmTitle;
+	$("deleteMessage").textContent = isTrash
+		? tr.deleteConfirmMessageTrash(entry.name, formatSize(entry.size))
+		: tr.deleteConfirmMessage(entry.name, formatSize(entry.size));
+	$("btnConfirmDelete").textContent = isTrash ? tr.moveToTrash : tr.deleteButton;
+	openModal("modal-delete");
 }
 
 function escapeHtml(s: string): string {
@@ -930,10 +966,7 @@ function escapeAttr(s: string): string {
 const detectAndShowCleanables = Effect.fn("detectAndShowCleanables")(
 	function* (rootPath: string, useCache: boolean = true) {
 		const banner = $("cleanBanner");
-		banner.classList.remove("hidden");
-		banner.classList.add("clean-banner-scanning");
-		$("cleanBannerMsg").textContent = t().cleanAnalyzing;
-		$("btnOpenClean").classList.add("hidden");
+		showCleanCallout("analyzing");
 
 		const backend = yield* Backend;
 
@@ -943,10 +976,7 @@ const detectAndShowCleanables = Effect.fn("detectAndShowCleanables")(
 			if (cached?.found && cached.cleanables && cached.cleanables.items.length > 0) {
 				currentCleanables = cached.cleanables;
 				cleanableSelected = new Set(cached.cleanables.items.map((i) => i.path));
-				banner.classList.remove("clean-banner-scanning");
-				const count = cached.cleanables.items.length;
-				$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(cached.cleanables.totalSize), count);
-				$("btnOpenClean").classList.remove("hidden");
+				updateCleanBanner();
 				return;
 			}
 		}
@@ -961,10 +991,7 @@ const detectAndShowCleanables = Effect.fn("detectAndShowCleanables")(
 		}
 		currentCleanables = result;
 		cleanableSelected = new Set(result.items.map((i) => i.path));
-		banner.classList.remove("clean-banner-scanning");
-		const count = result.items.length;
-		$("cleanBannerMsg").textContent = t().cleanRecoverable(formatSize(result.totalSize), count);
-		$("btnOpenClean").classList.remove("hidden");
+		updateCleanBanner();
 		// Save to cache for next time
 		yield* backend.saveCachedCleanables({ rootPath, cleanables: result });
 	},
@@ -1011,7 +1038,8 @@ const openCleanModal = Effect.fn("openCleanModal")(function* () {
 
 	(document.getElementById("cleanSelectAll") as HTMLInputElement).checked = true;
 	updateCleanSelection();
-	modal.classList.remove("hidden");
+	renderRiskLegend();
+	openModal("modal-clean");
 });
 
 function buildCleanFilters() {
@@ -1115,8 +1143,25 @@ function getFilteredCleanItems(): CleanableItem[] {
 	return scoped.items.filter((i) => activeCleanFilters.has(`${i.projectType}|${i.folderName}`));
 }
 
+/** Path of `p` relative to the scanned root, prefixed with the root's name (e.g. "Developer/storefront"). */
+function displayPath(p: string): string {
+	const root = currentTree?.path;
+	if (!root || !p.startsWith(root)) return p;
+	const rootName = root.split("/").pop() || root;
+	return (rootName + p.slice(root.length)).replace(/\/$/, "");
+}
+
+const RISK_LABEL = (risk: CleanableItem["risk"]) => (risk === "high" ? t().riskHigh : risk === "medium" ? t().riskMedium : t().riskLow);
+
+function renderRiskLegend() {
+	$("riskLegend").innerHTML = (["low", "medium", "high"] as const)
+		.map((risk) => `<span><i class="risk-dot risk-${risk}"></i>${escapeHtml(RISK_LABEL(risk))}</span>`)
+		.join("");
+}
+
 function renderCleanList() {
 	const list = $("cleanList");
+	const tr = t();
 	list.innerHTML = "";
 	const items = getFilteredCleanItems();
 
@@ -1134,20 +1179,35 @@ function renderCleanList() {
 		const row = document.createElement("label");
 		row.className = `clean-item clean-risk-${item.risk}`;
 		const isChecked = cleanableSelected.has(item.path);
-		const titleAttr = item.note ? ` title="${escapeAttr(item.note === "sensitiveDataFound" ? t().sensitiveDataFound : item.note)}"` : "";
+		const isSecret = item.note === "sensitiveDataFound";
+		const note = item.note && !isSecret ? item.note : "";
 		const isEnvFile = item.category === "secrets" && item.folderName.startsWith(".env");
 		const envsecDisabled = isEnvFile && !envsecAvailable;
+		const projectName = item.projectPath.split("/").pop() || item.projectPath;
+		row.title = note;
 		row.innerHTML = `
 			<input type="checkbox" ${isChecked ? "checked" : ""} data-path="${escapeAttr(item.path)}" />
-			<div class="clean-item-info"${titleAttr}>
-				<div class="clean-item-project">${escapeHtml(item.projectPath)}</div>
-				<div class="clean-item-detail">${escapeHtml(item.folderName)}${item.note === "sensitiveDataFound" ? ` <span class="clean-item-warning">⚠ ${escapeHtml(t().sensitiveDataFound)}</span>` : ""}</div>
+			<i class="risk-dot" title="${escapeAttr(RISK_LABEL(item.risk))}"></i>
+			<div class="clean-item-info">
+				<div class="clean-item-title">
+					<span class="clean-item-project">${escapeHtml(projectName)}</span>
+					<span class="clean-item-folder">${escapeHtml(item.folderName)}</span>
+				</div>
+				${
+					isSecret
+						? `<div class="clean-item-warning">${ICON("alert")}${escapeHtml(tr.sensitiveDataFound)}</div>`
+						: `<div class="clean-item-path">\u200E${escapeHtml(displayPath(item.projectPath))}\u200E</div>`
+				}
 			</div>
-			<div class="clean-item-type${item.category === "secrets" ? " clean-item-type-secrets" : ""}">${item.category === "secrets" ? "🔑 " : ""}${escapeHtml(item.projectType)}</div>
+			<div class="clean-item-type${item.category === "secrets" ? " clean-item-type-secrets" : ""}">${escapeHtml(item.projectType)}</div>
 			<div class="clean-item-size">${formatSize(item.size)}</div>
 			<div class="clean-item-actions">
-				<button class="btn-reveal" data-reveal-path="${escapeAttr(item.path)}" title="${escapeAttr(t().revealInFinder)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>
-				${isEnvFile ? `<button class="btn-envsec${envsecDisabled ? " btn-envsec-disabled" : ""}" ${envsecDisabled ? "disabled" : ""} data-envsec-path="${escapeAttr(item.path)}" data-envsec-project="${escapeAttr(item.projectPath)}" data-envsec-name="${escapeAttr(item.folderName)}" data-envsec-size="${item.size}" title="${escapeAttr(envsecDisabled ? t().envsecNotAvailable : t().importToEnvsec)}"><svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>${envsecDisabled ? '<span class="envsec-pro-badge">PRO</span>' : ""}</button>` : ""}
+				${
+					isEnvFile
+						? `<button class="icon-btn btn-envsec" ${envsecDisabled ? "disabled" : ""} title="${escapeAttr(envsecDisabled ? tr.envsecNotAvailable : tr.importToEnvsec)}">${ICON("lock")}</button>`
+						: ""
+				}
+				<button class="icon-btn btn-reveal" title="${escapeAttr(tr.revealInFinder)}">${ICON("reveal")}</button>
 			</div>
 		`;
 		const cb = row.querySelector("input")!;
@@ -1159,23 +1219,17 @@ function renderCleanList() {
 			}
 			updateCleanSelection();
 		});
-		const revealBtn = row.querySelector(".btn-reveal")!;
-		revealBtn.addEventListener("click", (e) => {
+		row.querySelector(".btn-reveal")!.addEventListener("click", (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			run(Backend.use((backend) => backend.revealInFinder({ filePath: item.path })).pipe(logFailure("[cleanables] revealInFinder error:")));
+			revealPath(item.path);
 		});
-		const envsecBtn = row.querySelector(".btn-envsec");
-		if (envsecBtn && !envsecBtn.hasAttribute("disabled")) {
+		const envsecBtn = row.querySelector<HTMLButtonElement>(".btn-envsec");
+		if (envsecBtn && !envsecBtn.disabled) {
 			envsecBtn.addEventListener("click", (e) => {
 				e.preventDefault();
 				e.stopPropagation();
-				openEnvsecImportForm(
-					envsecBtn.getAttribute("data-envsec-path")!,
-					envsecBtn.getAttribute("data-envsec-project")!,
-					envsecBtn.getAttribute("data-envsec-name")!,
-					Number(envsecBtn.getAttribute("data-envsec-size") || 0),
-				);
+				openEnvsecImportForm(item.path, item.projectPath, item.folderName, item.size);
 			});
 		}
 		list.appendChild(row);
@@ -1296,13 +1350,7 @@ $("cleanSelectAll").addEventListener("change", () => {
 
 $("btnOpenClean").addEventListener("click", () => run(openCleanModal()));
 
-$("btnCancelClean").addEventListener("click", () => {
-	$("modal-clean").classList.add("hidden");
-});
-
-$("modal-clean").querySelector(".modal-backdrop")!.addEventListener("click", () => {
-	$("modal-clean").classList.add("hidden");
-});
+$("btnCancelClean").addEventListener("click", () => closeModal("modal-clean"));
 
 const confirmBatchClean = Effect.fn("confirmBatchClean")(
 	function* () {
@@ -1329,6 +1377,7 @@ const confirmBatchClean = Effect.fn("confirmBatchClean")(
 				yield* loadTreeFromCache(currentTree.path, true);
 				yield* background(detectAndShowCleanables(currentTree.path, false));
 			}
+			yield* background(renderCacheList());
 		}
 	},
 	Effect.catchTag("BackendError", (e) =>
@@ -1362,15 +1411,29 @@ $("btnScan").addEventListener("click", () => {
 });
 
 $("btnRescan").addEventListener("click", () => {
-	const dirPath = scanPathInput.value.trim();
-	run(startScan(dirPath));
+	const dirPath = navigationStack[0]?.path ?? scanPathInput.value.trim();
+	if (dirPath) run(startScan(dirPath));
 });
 
 $("btnCancelScan").addEventListener("click", () => {
 	run(cancelScan());
 });
 
-// --- Render cache list ---
+// --- Sidebar: recent scans ---
+let cachedRoots: { rootPath: string; timestamp: number; size: number }[] = [];
+
+function relativeTime(timestamp: number): string {
+	const rtf = new Intl.RelativeTimeFormat(getLocale(), { numeric: "auto", style: "short" });
+	const seconds = Math.round((timestamp - Date.now()) / 1000);
+	const steps: [Intl.RelativeTimeFormatUnit, number][] = [["second", 60], ["minute", 60], ["hour", 24], ["day", 30], ["month", 12]];
+	let value = seconds;
+	for (const [unit, size] of steps) {
+		if (Math.abs(value) < size) return unit === "second" ? rtf.format(0, "second") : rtf.format(value, unit);
+		value = Math.round(value / size);
+	}
+	return rtf.format(value, "year");
+}
+
 const openCachedScan = Effect.fn("openCachedScan")(
 	function* (path: string) {
 		scanPathInput.value = path;
@@ -1384,88 +1447,106 @@ const deleteCacheEntry = Effect.fn("deleteCacheEntry")(
 	function* (path: string) {
 		const backend = yield* Backend;
 		yield* backend.deleteCacheEntry({ rootPath: path });
-		yield* background(renderCacheList());
+		if (currentTree?.path === path) yield* goToWelcome();
+		else yield* background(renderCacheList());
 	},
 	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] deleteCacheEntry error:", e.cause)),
 );
+
+/** Highlight the sidebar entry of the scan on screen. */
+function syncActiveRecent() {
+	const active = isScanning ? $("scanTarget").textContent : (navigationStack[0]?.path ?? null);
+	$("cacheList")
+		.querySelectorAll<HTMLElement>(".recent-item")
+		.forEach((item) => item.classList.toggle("active", item.dataset.path === active));
+}
 
 const renderCacheList: () => Effect.Effect<void, never, MainviewServices> = Effect.fn("renderCacheList")(
 	function* () {
 		const backend = yield* Backend;
 		const result = yield* backend.getCacheList({});
-		const container = $("cacheList");
-		container.innerHTML = "";
-		if (!result || result.entries.length === 0) {
-			container.classList.add("hidden");
-			return;
+		const tr = t();
+		const list = $("cacheList");
+		cachedRoots = result?.entries ?? [];
+		list.innerHTML = "";
+		$("recentEmpty").classList.toggle("hidden", cachedRoots.length > 0);
+		const nameOf = (p: string) => p.replace(/\/$/, "").split("/").pop() || p;
+		const names = cachedRoots.map((r) => nameOf(r.rootPath));
+		for (const entry of cachedRoots) {
+			const path = entry.rootPath.replace(/\/$/, "") || "/";
+			const name = nameOf(path);
+			// Same folder name twice: tell them apart by their parent
+			const parent = names.filter((n) => n === name).length > 1 ? `${nameOf(path.slice(0, -name.length - 1))} · ` : "";
+			const item = document.createElement("li");
+			item.className = "recent-item";
+			item.dataset.path = entry.rootPath;
+			item.title = path;
+			item.innerHTML = `
+				<button class="recent-item-open" aria-label="${escapeAttr(path)}"></button>
+				${ICON("folder")}
+				<div class="recent-item-text">
+					<span class="recent-item-name">${escapeHtml(name)}</span>
+					<span class="recent-item-meta">${escapeHtml(parent)}${formatSize(entry.size)} · ${escapeHtml(relativeTime(entry.timestamp))}</span>
+				</div>
+				<div class="recent-item-actions">
+					<button class="icon-btn" data-action="rescan" title="${escapeAttr(tr.rescanButton)}">${ICON("refresh")}</button>
+					<button class="icon-btn icon-btn-danger" data-action="delete-cache" title="${escapeAttr(tr.removeCache)}">${ICON("close")}</button>
+				</div>
+			`;
+			item.querySelector(".recent-item-open")!.addEventListener("click", () => run(openCachedScan(entry.rootPath)));
+			item.querySelector("[data-action='rescan']")!.addEventListener("click", () => {
+				scanPathInput.value = entry.rootPath;
+				run(startScan(entry.rootPath));
+			});
+			item.querySelector("[data-action='delete-cache']")!.addEventListener("click", () => run(deleteCacheEntry(entry.rootPath)));
+			list.appendChild(item);
 		}
-		container.classList.remove("hidden");
-		for (const entry of result.entries) {
-			const date = new Date(entry.timestamp);
-			const dateStr = date.toLocaleDateString(getLocale(), {
-				day: "numeric", month: "short",
-				hour: "2-digit", minute: "2-digit",
-			});
-			const card = document.createElement("div");
-			card.className = "cache-card";
-			card.innerHTML = `
-			<div class="cache-card-info">
-				<span class="cache-card-path" title="${escapeAttr(entry.rootPath)}">${escapeHtml(entry.rootPath.replace(/\/$/, ""))}</span>
-				<span class="cache-card-date">${dateStr}</span>
-			</div>
-			<div class="cache-card-actions">
-				<button class="btn btn-sm btn-secondary cache-card-btn" data-action="open" data-path="${escapeAttr(entry.rootPath)}">${t().openCache}</button>
-				<button class="btn btn-sm btn-primary cache-card-btn" data-action="rescan" data-path="${escapeAttr(entry.rootPath)}">${t().scanCache}</button>
-			</div>
-			<button class="cache-card-delete" data-action="delete-cache" data-path="${escapeAttr(entry.rootPath)}" title="${t().removeCache}"><svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-		`;
-			container.appendChild(card);
-		}
-		container.querySelectorAll("[data-action='open']").forEach((btn) => {
-			btn.addEventListener("click", (e) => {
-				const path = (e.currentTarget as HTMLElement).dataset.path!;
-				run(openCachedScan(path));
-			});
-		});
-		container.querySelectorAll("[data-action='rescan']").forEach((btn) => {
-			btn.addEventListener("click", (e) => {
-				const path = (e.currentTarget as HTMLElement).dataset.path!;
-				scanPathInput.value = path;
-				run(startScan(path));
-			});
-		});
-		container.querySelectorAll("[data-action='delete-cache']").forEach((btn) => {
-			btn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				const path = (e.currentTarget as HTMLElement).dataset.path!;
-				run(deleteCacheEntry(path));
-			});
-		});
+		syncActiveRecent();
 	},
 	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] renderCacheList error:", e.cause)),
 );
 
-// --- Delete modal ---
-$("btnCancelDelete").addEventListener("click", () => {
-	$("modal-delete").classList.add("hidden");
-	pendingDeletePath = null;
-	pendingDeleteSize = 0;
+// --- Dialogs ---
+// Initial focus is never a destructive button: Enter/Space must not delete by accident.
+const MODAL_FOCUS = { "modal-delete": "btnCancelDelete", "modal-clean": "btnCancelClean", "modal-settings": "settingLang" } as const;
+
+function openModal(id: "modal-clean" | "modal-delete" | "modal-settings") {
+	$(id).classList.remove("hidden");
+	$(MODAL_FOCUS[id]).focus({ preventScroll: true });
+}
+
+function closeModal(id: "modal-clean" | "modal-delete" | "modal-settings") {
+	$(id).classList.add("hidden");
+	if (id === "modal-delete") {
+		pendingDeletePath = null;
+		pendingDeleteSize = 0;
+	}
+	// Give keyboard navigation back to the list
+	if (document.querySelector(".screen.active")?.id === "screen-results") $("dirList").focus({ preventScroll: true });
+}
+
+function openModalId(): "modal-clean" | "modal-delete" | "modal-settings" | null {
+	for (const id of ["modal-delete", "modal-clean", "modal-settings"] as const) {
+		if (!$(id).classList.contains("hidden")) return id;
+	}
+	return null;
+}
+
+document.querySelectorAll<HTMLElement>(".modal").forEach((modal) => {
+	const id = modal.id as "modal-clean" | "modal-delete" | "modal-settings";
+	modal.querySelector(".modal-backdrop")!.addEventListener("click", () => closeModal(id));
+	modal.querySelectorAll("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => closeModal(id)));
 });
 
-$("modal-delete").querySelector(".modal-backdrop")!.addEventListener("click", () => {
-	$("modal-delete").classList.add("hidden");
-	pendingDeletePath = null;
-	pendingDeleteSize = 0;
-});
+// --- Delete modal ---
+$("btnCancelDelete").addEventListener("click", () => closeModal("modal-delete"));
 
 const confirmDelete = Effect.fn("confirmDelete")(
 	function* () {
 		if (!pendingDeletePath) return;
-		$("modal-delete").classList.add("hidden");
 		const path = pendingDeletePath;
 		const deletedSize = pendingDeleteSize;
-		pendingDeletePath = null;
-		pendingDeleteSize = 0;
+		closeModal("modal-delete");
 
 		const backend = yield* Backend;
 		const result = yield* backend.deleteEntry({ entryPath: path });
@@ -1478,6 +1559,7 @@ const confirmDelete = Effect.fn("confirmDelete")(
 			if (result?.rootPath) {
 				yield* loadTreeFromCache(result.rootPath, true);
 			}
+			yield* background(renderCacheList());
 		}
 	},
 	Effect.catchTag("BackendError", (e) => Effect.logError("[fe] deleteEntry error:", e.cause)),
@@ -1536,28 +1618,25 @@ window.addEventListener("resize", () => {
 // --- Autocomplete ---
 const acList = $("autocompleteList");
 const btnScan = $("btnScan") as HTMLButtonElement;
-const scanPathLabel = $("scanPathLabel");
 let acIndex = -1;
+
+function setPathError(message: string | null) {
+	scanPathInput.parentElement!.classList.toggle("invalid", message !== null);
+	$("scanPathError").textContent = message ?? "";
+	$("scanPathError").classList.toggle("hidden", message === null);
+}
 
 const validatePath = Effect.fn("validatePath")(
 	function* (dirPath: string) {
 		if (!dirPath.trim()) {
 			btnScan.disabled = true;
-			scanPathLabel.textContent = t().scanLabel;
-			scanPathLabel.style.color = "";
+			setPathError(null);
 			return;
 		}
 		const backend = yield* Backend;
 		const result = yield* backend.validatePath({ dirPath: dirPath.trim() });
-		if (result?.valid) {
-			btnScan.disabled = false;
-			scanPathLabel.textContent = t().scanLabel;
-			scanPathLabel.style.color = "";
-		} else {
-			btnScan.disabled = true;
-			scanPathLabel.textContent = t().dirNotFound;
-			scanPathLabel.style.color = "var(--danger)";
-		}
+		btnScan.disabled = !result?.valid;
+		setPathError(result?.valid ? null : t().dirNotFound);
 	},
 	Effect.catchTag("BackendError", (e) => Effect.logError("[autocomplete] validatePath error:", e.cause)),
 );
@@ -1580,7 +1659,9 @@ const fetchSuggestions: (partial: string) => Effect.Effect<void, never, Mainview
 		for (const s of result.suggestions) {
 			const item = document.createElement("div");
 			item.className = "autocomplete-item";
-			item.textContent = s;
+			item.setAttribute("role", "option");
+			item.innerHTML = `${ICON("folder")}<span>${escapeHtml(s)}</span>`;
+			item.dataset.value = s;
 			item.addEventListener("mousedown", (e) => {
 				e.preventDefault();
 				run(acceptSuggestion(s));
@@ -1640,8 +1721,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 		if (isOpen && acIndex >= 0) {
 			e.preventDefault();
 			const selected = items[acIndex] as HTMLElement;
-			const val = selected.textContent || "";
-			run(acceptSuggestion(val));
+			run(acceptSuggestion(selected.dataset.value || ""));
 		} else {
 			acList.classList.add("hidden");
 		}
@@ -1663,8 +1743,7 @@ scanPathInput.addEventListener("keydown", (e) => {
 	} else if (e.key === "Tab" && acIndex >= 0) {
 		e.preventDefault();
 		const selected = items[acIndex] as HTMLElement;
-		const val = selected.textContent || "";
-		run(acceptSuggestion(val));
+		run(acceptSuggestion(selected.dataset.value || ""));
 	}
 });
 
@@ -1683,27 +1762,8 @@ scanPathInput.addEventListener("focus", () => {
 	if (scanPathInput.value) run(suggest(scanPathInput.value));
 });
 
-// --- Settings (responsive collapsed tab) ---
-const settingsTab = $("settingsTab");
-const settingsOverlayBackdrop = $("settingsOverlayBackdrop");
-
-function openSettingsPanel() {
-	const settings = $("settingsSection");
-	settings.classList.add("settings-open");
-	settings.classList.remove("hidden");
-	settingsTab.classList.add("settings-tab-hidden");
-	settingsOverlayBackdrop.classList.add("visible");
-}
-
-function closeSettingsPanel() {
-	const settings = $("settingsSection");
-	settings.classList.remove("settings-open");
-	settingsTab.classList.remove("settings-tab-hidden");
-	settingsOverlayBackdrop.classList.remove("visible");
-}
-
-settingsTab.addEventListener("click", openSettingsPanel);
-settingsOverlayBackdrop.addEventListener("click", closeSettingsPanel);
+// --- Settings dialog ---
+$("btnSettings").addEventListener("click", () => openModal("modal-settings"));
 
 // --- Settings ---
 const settingMaxCache = $("settingMaxCache") as HTMLInputElement;
@@ -1719,6 +1779,7 @@ const loadSettingsUI = Effect.fn("loadSettingsUI")(
 			settingMaxCache.value = String(settings.maxCacheEntries);
 			settingMaxDepth.value = String(settings.maxDepth);
 			settingDeleteMode.value = settings.deleteMode;
+			syncDeleteModeControl();
 		}
 	},
 	Effect.catchTag("BackendError", (e) => Effect.logError("[settings] load error:", e.cause)),
@@ -1747,6 +1808,24 @@ settingMaxDepth.addEventListener("change", saveSettingsDebounced);
 settingMaxDepth.addEventListener("input", saveSettingsDebounced);
 settingDeleteMode.addEventListener("change", saveSettingsDebounced);
 
+function syncDeleteModeControl() {
+	const mode = settingDeleteMode.value;
+	$("deleteModeSegmented")
+		.querySelectorAll<HTMLElement>("button")
+		.forEach((btn) => btn.classList.toggle("active", btn.dataset.mode === mode));
+	$("deleteModeHint").textContent = mode === "permanent" ? t().deleteModePermanentHint : t().deleteModeTrashHint;
+}
+
+$("deleteModeSegmented")
+	.querySelectorAll<HTMLElement>("button")
+	.forEach((btn) =>
+		btn.addEventListener("click", () => {
+			settingDeleteMode.value = btn.dataset.mode!;
+			syncDeleteModeControl();
+			saveSettingsDebounced();
+		}),
+	);
+
 // --- Language selector ---
 function populateLanguageSelector() {
 	settingLang.innerHTML = "";
@@ -1769,48 +1848,59 @@ settingLang.addEventListener("change", () => {
 // --- Apply all translations to static DOM elements ---
 function applyTranslations() {
 	const tr = t();
-
-	// HTML lang attribute
 	document.documentElement.lang = getLanguage();
 
-	// Welcome screen
+	// Sidebar
+	$("btnNewScanText").textContent = tr.newScan;
+	$("recentHeading").textContent = tr.recentScans;
+	$("recentEmpty").textContent = tr.noRecentScans;
+	$("btnSettingsText").textContent = tr.settingsTitle;
+	$("statsWidgetTitle").textContent = tr.statsTitle;
+
+	// Start
+	$("startTitle").textContent = tr.startTitle;
 	$("welcomeDesc").textContent = tr.welcomeDesc;
 	$("scanPathLabel").textContent = tr.scanLabel;
 	btnScan.textContent = tr.scanButton;
+	$("quickPicksLabel").textContent = tr.quickPicks;
 
-	// Scanning screen
-	$("scanningText").textContent = tr.scanningText;
+	// Scanning
+	$("scanningText").textContent = tr.scanningText.replace(/\.{3}$/, "…");
 	$("btnCancelScan").textContent = tr.cancelScan;
 
-	// Results screen
+	// Results
 	$("btnBack").title = tr.backTitle;
 	$("breadcrumb").setAttribute("aria-label", tr.navigation);
-	$("btnRescan").textContent = tr.rescanButton;
+	$("btnRescanText").textContent = tr.rescanButton;
+	$("btnReveal").title = tr.revealInFinder;
 	$("btnOpenClean").textContent = tr.cleanDetails;
+	$("colName").textContent = tr.nameColumn;
+	$("colSize").textContent = tr.size;
 
 	// Settings
 	$("settingsHeaderText").textContent = tr.settingsTitle;
-	$("settingsTabText").textContent = tr.settingsTitle;
 	$("settingLangLabel").textContent = tr.language;
 	$("settingMaxCacheLabel").textContent = tr.maxCache;
+	$("maxCacheHint").textContent = tr.maxCacheHint;
 	$("settingMaxDepthLabel").textContent = tr.scanDepth;
+	$("scanDepthHint").textContent = tr.scanDepthHint;
 	$("settingDeleteModeLabel").textContent = tr.deleteMode;
 	$("optionTrash").textContent = tr.deleteModeTrash;
 	$("optionPermanent").textContent = tr.deleteModePermanent;
+	syncDeleteModeControl();
 
-	// Delete modal
-	$("deleteModalTitle").textContent = tr.deleteConfirmTitle;
+	// Delete dialog
 	$("btnCancelDelete").textContent = tr.cancel;
-	$("btnConfirmDelete").textContent = tr.deleteButton;
 
-	// Clean modal
+	// Smart Clean
 	$("cleanModalTitle").textContent = tr.smartCleanTitle;
 	$("cleanModalDesc").textContent = tr.cleanModalDesc;
 	$("cleanSelectAllLabel").textContent = tr.selectAll;
 	$("btnCancelClean").textContent = tr.cancel;
 	$("btnConfirmCleanText").textContent = tr.cleanSelectedWithSize("");
+	renderRiskLegend();
 
-	// Envsec import form
+	// envsec import
 	$("envsecImportTitle").textContent = tr.envsecImportTitle;
 	$("envsecContextLabel").textContent = tr.envsecContextPrompt;
 	$("btnEnvsecCancel").textContent = tr.cancel;
@@ -1820,24 +1910,109 @@ function applyTranslations() {
 	$("freedJustLabel").textContent = tr.freedJust;
 	$("freedTotalLabel").textContent = tr.freedSessionTotal;
 
-	// Info panel
+	// Inspector
 	$("infoPanelClose").title = tr.closeEsc;
 	$("infoPanelLoading").textContent = tr.loading;
+
+	renderQuickPicks();
 }
+
+/** "Ingombro — <folder>" in the titlebar. */
+function setTitle(path: string | null) {
+	const name = path ? path.replace(/\/$/, "").split("/").pop() || path : null;
+	$("titlebarTitle").textContent = name ? `Ingombro — ${name}` : "Ingombro";
+}
+
+// --- Start screen ---
+$("btnNewScan").addEventListener("click", () => {
+	if (isScanning) return;
+	run(
+		goToWelcome().pipe(
+			Effect.andThen(
+				Effect.sync(() => {
+					scanPathInput.focus();
+					scanPathInput.select();
+				}),
+			),
+		),
+	);
+});
+
+$("btnReveal").addEventListener("click", () => {
+	const current = navigationStack[navigationStack.length - 1];
+	if (current) revealPath(current.path);
+});
+
+// Common starting points, shown when they exist on this machine
+const QUICK_PICKS = [
+	{ path: "~", icon: "home" },
+	{ path: "~/Desktop", icon: "folder" },
+	{ path: "~/Documents", icon: "folder" },
+	{ path: "~/Downloads", icon: "folder" },
+	{ path: "~/Developer", icon: "folder" },
+	{ path: "~/Movies", icon: "folder" },
+];
+let availableQuickPicks: string[] = [];
+
+function renderQuickPicks() {
+	const list = $("quickPicksList");
+	list.innerHTML = "";
+	for (const pick of QUICK_PICKS.filter((p) => availableQuickPicks.includes(p.path))) {
+		const btn = document.createElement("button");
+		btn.className = "quick-pick";
+		btn.title = pick.path;
+		btn.innerHTML = `${ICON(pick.icon)}<span>${escapeHtml(pick.path === "~" ? t().homeFolder : pick.path.slice(2))}</span>`;
+		btn.addEventListener("click", () => {
+			scanPathInput.value = pick.path;
+			run(startScan(pick.path));
+		});
+		list.appendChild(btn);
+	}
+	$("quickPicks").classList.toggle("hidden", list.children.length === 0);
+}
+
+const loadQuickPicks = Effect.fn("loadQuickPicks")(function* () {
+	const backend = yield* Backend;
+	const valid = yield* Effect.forEach(
+		QUICK_PICKS,
+		(pick) =>
+			backend.validatePath({ dirPath: pick.path }).pipe(
+				Effect.map((r) => (r?.valid ? pick.path : null)),
+				Effect.orElseSucceed(() => null),
+			),
+		{ concurrency: "unbounded" },
+	);
+	availableQuickPicks = valid.filter((p): p is string => p !== null);
+	renderQuickPicks();
+});
+
+// Repaint canvases when the system switches between light and dark
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+	if (treemapRects.length) {
+		const current = navigationStack[navigationStack.length - 1];
+		if (current) {
+			skipNextAnimation = true;
+			renderTreemap((current.children || []).filter((c) => c.size > 0));
+			renderDirList((current.children || []).filter((c) => c.size > 0), current.size);
+		}
+	}
+	run(inSlot("stats", renderStatsWidget()));
+});
 
 // --- Info Panel ---
 let infoPanelOpen = false;
 
 // Runs in the "infoPanel" slot: opening cancels a pending close animation and
 // any previous entry still loading.
-const openInfoPanel = Effect.fn("openInfoPanel")(function* (entryPath: string) {
+// `knownSize` is the recursive size from the scan; entry info only sums a folder's direct files.
+const openInfoPanel = Effect.fn("openInfoPanel")(function* (entryPath: string, knownSize?: number) {
 	const panel = $("infoPanel");
 	const backdrop = $("infoPanelBackdrop");
 	const body = $("infoPanelBody");
 	const title = $("infoPanelTitle");
 
-	title.textContent = t().loading;
-	body.innerHTML = `<div class="info-panel-loading">${t().loading}</div>`;
+	title.textContent = entryPath.split("/").pop() || entryPath;
+	body.innerHTML = `<div class="inspector-loading">${t().loading}</div>`;
 
 	panel.classList.remove("hidden");
 	backdrop.classList.remove("hidden");
@@ -1852,17 +2027,17 @@ const openInfoPanel = Effect.fn("openInfoPanel")(function* (entryPath: string) {
 			Effect.sync(() => {
 				// The Bun side may answer with an `{ error }` object instead of an EntryInfo.
 				if (!info || (info as EntryInfo & { error?: unknown }).error) {
-					body.innerHTML = `<div class="info-panel-loading">${t().loadError}</div>`;
+					body.innerHTML = `<div class="inspector-loading">${t().loadError}</div>`;
 					title.textContent = t().errorTitle;
 					return;
 				}
 				title.textContent = info.name;
-				renderInfoPanelContent(info);
+				renderInfoPanelContent(info.isDir && knownSize !== undefined ? { ...info, size: knownSize } : info);
 			}),
 		),
 		Effect.catchTag("BackendError", () =>
 			Effect.sync(() => {
-				body.innerHTML = `<div class="info-panel-loading">${t().connectionError}</div>`;
+				body.innerHTML = `<div class="inspector-loading">${t().connectionError}</div>`;
 			}),
 		),
 	);
@@ -1894,122 +2069,108 @@ function formatDate(ms: number): string {
 function renderInfoPanelContent(info: EntryInfo) {
 	const body = $("infoPanelBody");
 	const tr = t();
+	const row = (label: string, value: string) =>
+		`<div class="info-row"><span class="info-row-label">${escapeHtml(label)}</span><span class="info-row-value">${escapeHtml(value)}</span></div>`;
+	const stat = (value: string, label: string) =>
+		`<div class="info-stat"><div class="info-stat-value">${escapeHtml(value)}</div><div class="info-stat-label">${escapeHtml(label)}</div></div>`;
+	const section = (title: string, content: string) =>
+		`<div class="info-section"><div class="info-section-title">${escapeHtml(title)}</div>${content}</div>`;
+	const number = new Intl.NumberFormat(getLocale());
+
+	$("infoPanelIcon").innerHTML = ICON(info.isDir ? "folder" : "file");
 	let html = "";
 
 	if (info.isDir) {
-		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">${tr.details}</div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.files}</span><span class="info-row-value">${info.fileCount ?? 0}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.folders}</span><span class="info-row-value">${info.dirCount ?? 0}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
-		html += `</div>`;
-
-		if (info.largestFile) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.largestFile}</div>`;
-			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.largestFile.name)}</span><span class="info-row-value">${formatSize(info.largestFile.size)}</span></div>`;
-			html += `</div>`;
-		}
-
-		if (info.newestFile) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.newestModified}</div>`;
-			html += `<div class="info-row"><span class="info-row-label">${escapeHtml(info.newestFile.name)}</span><span class="info-row-value">${formatDate(info.newestFile.modifiedAt)}</span></div>`;
-			html += `</div>`;
-		}
-
+		html += `<div class="info-stats">${stat(formatSize(info.size), tr.size)}${stat(number.format(info.fileCount ?? 0), tr.files)}${stat(number.format(info.dirCount ?? 0), tr.folders)}</div>`;
+		html += section(tr.details, row(tr.lastModified, formatDate(info.modifiedAt)) + row(tr.created, formatDate(info.createdAt)));
+		if (info.largestFile) html += section(tr.largestFile, row(info.largestFile.name, formatSize(info.largestFile.size)));
+		if (info.newestFile) html += section(tr.newestModified, row(info.newestFile.name, formatDate(info.newestFile.modifiedAt)));
 		if (info.typeDistribution && info.typeDistribution.length > 0) {
 			const typeLabelMap: Record<string, string> = {
 				code: tr.typeCode, images: tr.typeImages, documents: tr.typeDocuments,
 				config: tr.typeConfig, styles: tr.typeStyles, html: tr.typeHTML, other: tr.typeOther,
 			};
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.typeDistribution}</div>`;
-			html += `<div class="info-type-bar">`;
-			for (const td of info.typeDistribution) {
-				html += `<div class="info-type-bar-seg" style="width:${td.percentage}%;background:${td.color}"></div>`;
-			}
-			html += `</div>`;
-			html += `<div class="info-type-legend">`;
-			for (const td of info.typeDistribution) {
-				const label = typeLabelMap[td.label] || td.label;
-				html += `<span class="info-type-legend-item"><span class="info-type-dot" style="background:${td.color}"></span>${escapeHtml(label)} ${td.percentage}%</span>`;
-			}
-			html += `</div>`;
-			html += `</div>`;
+			const bar = info.typeDistribution.map((td) => `<div style="width:${td.percentage}%;background:${td.color}"></div>`).join("");
+			const legend = info.typeDistribution
+				.map(
+					(td) =>
+						`<span class="info-type-legend-item"><span class="info-type-dot" style="background:${td.color}"></span>${escapeHtml(typeLabelMap[td.label] || td.label)} ${td.percentage}%</span>`,
+				)
+				.join("");
+			html += section(tr.typeDistribution, `<div class="info-type-bar">${bar}</div><div class="info-type-legend">${legend}</div>`);
 		}
 	} else {
-		if (info.extension) {
-			html += `<div style="margin-bottom:14px"><span class="info-ext-badge">${escapeHtml(info.extension)}</span></div>`;
-		}
-
-		html += `<div class="info-section">`;
-		html += `<div class="info-section-title">${tr.details}</div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.size}</span><span class="info-row-value">${formatSize(info.size)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.lastModified}</span><span class="info-row-value">${formatDate(info.modifiedAt)}</span></div>`;
-		html += `<div class="info-row"><span class="info-row-label">${tr.created}</span><span class="info-row-value">${formatDate(info.createdAt)}</span></div>`;
-		html += `</div>`;
-
+		html += `<div class="info-stats">${stat(formatSize(info.size), tr.size)}${info.extension ? stat(info.extension, "") : ""}</div>`;
+		html += section(tr.details, row(tr.lastModified, formatDate(info.modifiedAt)) + row(tr.created, formatDate(info.createdAt)));
 		if (info.previewType === "text" && info.textPreview) {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.preview}</div>`;
-			html += `<pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre>`;
-			html += `</div>`;
+			html += section(tr.preview, `<pre class="info-text-preview">${escapeHtml(info.textPreview)}</pre>`);
 		} else if (info.previewType === "image") {
-			html += `<div class="info-section">`;
-			html += `<div class="info-section-title">${tr.preview}</div>`;
-			html += `<img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" />`;
-			html += `</div>`;
-		} else {
-			html += `<div class="info-file-icon">📄</div>`;
+			html += section(tr.preview, `<img class="info-image-preview" src="file://${encodeURI(info.path)}" alt="${escapeAttr(info.name)}" />`);
 		}
 	}
 
-	html += `<div class="info-section" style="margin-top:8px">`;
-	html += `<div class="info-section-title">${tr.path}</div>`;
-	html += `<div style="font-size:11px;color:var(--text-muted);word-break:break-all;line-height:1.5">${escapeHtml(info.path)}</div>`;
-	html += `</div>`;
-
+	html += section(tr.path, `<div class="info-path">${escapeHtml(info.path)}</div>`);
+	html += `<div class="inspector-actions"><button class="btn btn-secondary btn-sm" id="inspectorReveal">${ICON("reveal")}${escapeHtml(tr.revealInFinder)}</button></div>`;
 	body.innerHTML = html;
+	$("inspectorReveal").addEventListener("click", () => revealPath(info.path));
 }
 
 $("infoPanelClose").addEventListener("click", closeInfoPanel);
 $("infoPanelBackdrop").addEventListener("click", closeInfoPanel);
 
 document.addEventListener("keydown", (e) => {
-	if (e.key === "Escape" && infoPanelOpen) {
+	const modal = openModalId();
+	if (e.key === "Escape") {
+		if (!$("envsecImportForm").classList.contains("hidden")) return; // handled by the form
+		if (modal) {
+			e.preventDefault();
+			closeModal(modal);
+			return;
+		}
+		if (infoPanelOpen) {
+			e.preventDefault();
+			closeInfoPanel();
+			return;
+		}
+		if (isScanning) {
+			e.preventDefault();
+			run(cancelScan());
+			return;
+		}
+	}
+
+	if (modal) return;
+
+	// ⌘N: new scan, ⌘,: settings (macOS conventions)
+	if (e.metaKey && e.key === "n") {
 		e.preventDefault();
-		closeInfoPanel();
+		$("btnNewScan").click();
+		return;
+	}
+	if (e.metaKey && e.key === ",") {
+		e.preventDefault();
+		openModal("modal-settings");
 		return;
 	}
 
-	// Close settings overlay on Escape (small screens)
-	if (e.key === "Escape" && $("settingsSection").classList.contains("settings-open")) {
-		e.preventDefault();
-		closeSettingsPanel();
-		return;
-	}
-
-	// T005 — Global keyboard shortcuts
 	const activeScreen = document.querySelector(".screen.active");
 	const isResults = activeScreen?.id === "screen-results";
-	const isModalOpen = !$("modal-delete").classList.contains("hidden") || !$("modal-clean").classList.contains("hidden");
-	const isInputFocused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLSelectElement;
+	const isInputFocused =
+		document.activeElement instanceof HTMLInputElement ||
+		document.activeElement instanceof HTMLTextAreaElement ||
+		document.activeElement instanceof HTMLSelectElement;
+	if (isInputFocused || !isResults) return;
 
-	if (isModalOpen || isInputFocused) return;
-
-	if (e.key === "Backspace" && isResults) {
+	if (e.key === "Backspace" && !e.metaKey) {
 		e.preventDefault();
 		run(navigateBack());
 		return;
 	}
-
-	if (e.key === "Escape" && isResults) {
+	// Arrow keys work even before the list has focus
+	if ((e.key === "ArrowDown" || e.key === "ArrowUp") && document.activeElement !== $("dirList")) {
 		e.preventDefault();
-		run(goToWelcome());
-		return;
+		$("dirList").focus({ preventScroll: true });
+		selectRow(selectedIndex < 0 ? 0 : selectedIndex + (e.key === "ArrowDown" ? 1 : -1));
 	}
 });
 
@@ -2035,6 +2196,7 @@ const renderStatsWidget = Effect.fn("renderStatsWidget")(function* () {
 	widget.classList.remove("hidden");
 	$("statsWidgetTitle").textContent = tr.statsTitle;
 	$("statsWidgetTotal").textContent = formatSize(stats.totalFreed);
+	$("statsWidget").title = tr.statsTitle + " · 14d";
 
 	// Build 14-day array (fill gaps with 0)
 	const days: { date: string; freedBytes: number }[] = [];
@@ -2069,6 +2231,8 @@ const renderStatsWidget = Effect.fn("renderStatsWidget")(function* () {
 	canvas.style.height = h + "px";
 
 	const ctx = canvas.getContext("2d")!;
+	const success = cssVar("--success");
+	const empty = cssVar("--surface-3");
 	const barGap = 3;
 	const barWidth = (w - barGap * (days.length - 1)) / days.length;
 
@@ -2097,15 +2261,8 @@ const renderStatsWidget = Effect.fn("renderStatsWidget")(function* () {
 			const x = i * (barWidth + barGap);
 			const y = h - barH;
 
-			if (d.freedBytes > 0) {
-				const intensity = d.freedBytes / maxBytes;
-				const r = Math.round(108 + (85 - 108) * intensity);
-				const g = Math.round(92 + (239 - 92) * intensity);
-				const b = Math.round(231 + (196 - 231) * intensity);
-				ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
-			} else {
-				ctx.fillStyle = "rgba(255,255,255,0.06)";
-			}
+			ctx.fillStyle = d.freedBytes > 0 ? success : empty;
+			ctx.globalAlpha = d.freedBytes > 0 ? 0.45 + 0.55 * (d.freedBytes / maxBytes) : 1;
 
 			const radius = Math.min(2, barWidth / 2, barH / 2);
 			ctx.beginPath();
@@ -2119,9 +2276,10 @@ const renderStatsWidget = Effect.fn("renderStatsWidget")(function* () {
 			ctx.closePath();
 			ctx.fill();
 
+			ctx.globalAlpha = 1;
 			if (d.freedBytes === 0) {
-				ctx.fillStyle = "rgba(255,255,255,0.06)";
-				ctx.fillRect(x, h - 2, barWidth, 2);
+				ctx.fillStyle = empty;
+				ctx.fillRect(x, h - 3, barWidth, 3);
 			}
 		}
 
@@ -2155,7 +2313,9 @@ run(
 	Effect.gen(function* () {
 		yield* background(renderCacheList());
 		yield* background(loadSettingsUI());
+		yield* background(loadQuickPicks());
 		yield* inSlot("stats", renderStatsWidget());
 		yield* background(loadVersionLabel());
 	}),
 );
+scanPathInput.focus();

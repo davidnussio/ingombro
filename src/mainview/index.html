@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,170 +7,199 @@
 	<link rel="stylesheet" href="views://mainview/index.css" />
 </head>
 <body>
-	<div class="titlebar" id="titlebar">
-		<div class="titlebar-text">Ingombro</div>
+	<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+		<defs>
+			<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></symbol>
+			<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+			<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+			<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+			<symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+			<symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+			<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.7-4.4L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.7 4.4L20 16"/><path d="M20 20v-4h-4"/></symbol>
+			<symbol id="i-reveal" viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2.2h7.4A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><path d="m10 13.5 2-2 2 2M12 11.5v5"/></symbol>
+			<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></symbol>
+			<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
+			<symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+			<symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+			<symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.8 4.9L19 9.7l-5.2 1.8L12 16.4l-1.8-4.9L5 9.7l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+			<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+			<symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+			<symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4.2 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
+			<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+			<symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/></symbol>
+		</defs>
+	</svg>
+
+	<header class="titlebar" id="titlebar">
+		<span class="titlebar-title" id="titlebarTitle">Ingombro</span>
+	</header>
+
+	<div class="update-banner hidden" id="updateBanner" data-no-drag>
+		<svg class="icon"><use href="#i-download" /></svg>
+		<span id="updateBannerText"></span>
+		<button class="btn btn-sm btn-primary" id="updateBannerAction"></button>
+		<button class="icon-btn" id="updateBannerDismiss"><svg class="icon"><use href="#i-close" /></svg></button>
 	</div>
 
-	<div id="app">
-		<!-- Welcome screen -->
-		<div id="screen-welcome" class="screen active">
-			<div class="welcome-main">
-				<div class="welcome-card">
-					<img class="welcome-icon" src="views://mainview/assets/icon.png" alt="Ingombro" />
-					<h1>Ingombro</h1>
-					<p class="welcome-desc" id="welcomeDesc"></p>
-					<div class="scan-input-group">
-						<label for="scanPath" id="scanPathLabel"></label>
-						<div class="autocomplete-wrapper">
-							<input type="text" id="scanPath" placeholder="~/" autocomplete="off" />
-							<span class="input-hint" id="inputHint">⌘↵</span>
-							<div id="autocompleteList" class="autocomplete-list hidden"></div>
+	<div class="shell" id="app">
+		<!-- Sidebar -->
+		<aside class="sidebar">
+			<button class="btn btn-primary btn-block" id="btnNewScan">
+				<svg class="icon"><use href="#i-plus" /></svg>
+				<span id="btnNewScanText"></span>
+			</button>
+
+			<div class="sidebar-section">
+				<div class="sidebar-heading" id="recentHeading"></div>
+				<ul class="recent-list" id="cacheList"></ul>
+				<p class="recent-empty hidden" id="recentEmpty"></p>
+			</div>
+
+			<div class="sidebar-footer">
+				<div class="freed-card hidden" id="statsWidget">
+					<div class="freed-card-top">
+						<span class="freed-card-label" id="statsWidgetTitle"></span>
+						<span class="freed-card-total" id="statsWidgetTotal"></span>
+					</div>
+					<div class="freed-card-chart" id="statsChart"></div>
+				</div>
+				<div class="sidebar-bottom">
+					<button class="sidebar-link" id="btnSettings">
+						<svg class="icon"><use href="#i-settings" /></svg>
+						<span id="btnSettingsText"></span>
+					</button>
+					<span class="version-label" id="versionLabel"></span>
+				</div>
+			</div>
+		</aside>
+
+		<main class="main">
+			<!-- Start: choose a folder -->
+			<section id="screen-welcome" class="screen active">
+				<div class="start">
+					<img class="start-icon" src="views://mainview/assets/icon.png" alt="" />
+					<h1 class="start-title" id="startTitle"></h1>
+					<p class="start-desc" id="welcomeDesc"></p>
+
+					<label class="field-label" for="scanPath" id="scanPathLabel"></label>
+					<div class="scan-bar">
+						<div class="path-field">
+							<svg class="icon path-field-icon"><use href="#i-folder" /></svg>
+							<input type="text" id="scanPath" placeholder="~/" autocomplete="off" spellcheck="false" />
+							<kbd class="input-hint" id="inputHint">⌘↵</kbd>
+							<div id="autocompleteList" class="autocomplete-list hidden" role="listbox"></div>
 						</div>
+						<button id="btnScan" class="btn btn-primary btn-lg" disabled></button>
 					</div>
-					<button id="btnScan" class="btn btn-primary" disabled></button>
-					<div id="cacheList" class="cache-list hidden"></div>
+					<p class="field-error hidden" id="scanPathError"></p>
+
+					<div class="quick-picks hidden" id="quickPicks">
+						<span class="quick-picks-label" id="quickPicksLabel"></span>
+						<div class="quick-picks-list" id="quickPicksList"></div>
+					</div>
 				</div>
-			</div>
-			<div id="statsWidget" class="stats-widget hidden">
-				<span class="stats-widget-label" id="statsWidgetTitle"></span>
-				<span class="stats-widget-total" id="statsWidgetTotal"></span>
-				<div class="stats-widget-chart" id="statsChart"></div>
-			</div>
-		</div>
+			</section>
 
-		<!-- Scanning progress -->
-		<div id="screen-scanning" class="screen">
-			<div class="scanning-card">
-				<div class="spinner" id="scanSpinner"></div>
-				<p class="scanning-text" id="scanningText"></p>
-				<p id="scanCurrentDir" class="scan-current-dir"></p>
-				<button id="btnCancelScan" class="btn btn-secondary btn-cancel-scan"></button>
-			</div>
-		</div>
+			<!-- Scanning progress -->
+			<section id="screen-scanning" class="screen">
+				<div class="scanning">
+					<div class="scanning-ring" aria-hidden="true"></div>
+					<h2 class="scanning-title" id="scanningText"></h2>
+					<p class="scanning-target" id="scanTarget"></p>
+					<p class="scanning-counts" id="scanCounts"></p>
+					<p class="scanning-dir" id="scanCurrentDir"></p>
+					<button id="btnCancelScan" class="btn btn-secondary"></button>
+				</div>
+			</section>
 
-		<!-- Results screen -->
-		<div id="screen-results" class="screen">
-			<div class="results-header">
-				<div class="results-header-left">
-					<button id="btnBack" class="btn btn-icon" title=""><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg></button>
-					<nav id="breadcrumb" class="breadcrumb" aria-label=""></nav>
+			<!-- Results -->
+			<section id="screen-results" class="screen">
+				<div class="toolbar">
+					<button id="btnBack" class="icon-btn icon-btn-bordered"><svg class="icon"><use href="#i-back" /></svg></button>
+					<nav id="breadcrumb" class="breadcrumb"></nav>
+					<div class="toolbar-spacer"></div>
 					<span id="totalSize" class="total-size"></span>
+					<button id="btnReveal" class="icon-btn icon-btn-bordered"><svg class="icon"><use href="#i-reveal" /></svg></button>
+					<button id="btnRescan" class="btn btn-secondary btn-sm">
+						<svg class="icon"><use href="#i-refresh" /></svg>
+						<span id="btnRescanText"></span>
+					</button>
 				</div>
-				<div class="results-header-right">
-					<button id="btnRescan" class="btn btn-secondary btn-sm"></button>
-				</div>
-			</div>
-			<div class="results-body">
-				<div id="cleanBanner" class="clean-banner hidden">
-					<div class="clean-banner-icon">✨</div>
-					<div class="clean-banner-text">
-						<span id="cleanBannerMsg"></span>
+
+				<div class="results-body">
+					<div id="cleanBanner" class="clean-callout hidden">
+						<div class="clean-callout-icon"><svg class="icon"><use href="#i-sparkles" /></svg></div>
+						<div class="clean-callout-text">
+							<span class="clean-callout-title" id="cleanBannerMsg"></span>
+							<span class="clean-callout-sub" id="cleanBannerSub"></span>
+						</div>
+						<button id="btnOpenClean" class="btn btn-sm btn-primary"></button>
 					</div>
-					<button id="btnOpenClean" class="btn btn-sm btn-accent"></button>
+
+					<div class="viz-container" id="vizContainer">
+						<canvas id="treemapCanvas"></canvas>
+					</div>
+
+					<div class="list-card">
+						<div class="list-header">
+							<span id="colName"></span>
+							<span class="list-header-size" id="colSize"></span>
+						</div>
+						<div class="dir-list" id="dirList" role="listbox" tabindex="0"></div>
+					</div>
 				</div>
-				<div class="viz-container" id="vizContainer">
-					<canvas id="treemapCanvas"></canvas>
+			</section>
+		</main>
+	</div>
+
+	<!-- Settings dialog -->
+	<div id="modal-settings" class="modal hidden">
+		<div class="modal-backdrop"></div>
+		<div class="modal-card modal-card-sm" role="dialog" aria-labelledby="settingsHeaderText">
+			<div class="modal-head">
+				<h3 id="settingsHeaderText"></h3>
+				<button class="icon-btn modal-close" data-close-modal><svg class="icon"><use href="#i-close" /></svg></button>
+			</div>
+			<div class="form">
+				<div class="form-row">
+					<label for="settingLang" id="settingLangLabel"></label>
+					<select id="settingLang" class="select"></select>
 				</div>
-				<div class="dir-list" id="dirList"></div>
+				<div class="form-row form-row-stacked">
+					<span class="form-label" id="settingDeleteModeLabel"></span>
+					<div class="segmented" id="deleteModeSegmented">
+						<button data-mode="trash" id="optionTrash"></button>
+						<button data-mode="permanent" id="optionPermanent"></button>
+					</div>
+					<p class="form-hint" id="deleteModeHint"></p>
+					<select id="settingDeleteMode" class="hidden">
+						<option value="trash"></option>
+						<option value="permanent"></option>
+					</select>
+				</div>
+				<div class="form-row">
+					<div>
+						<label for="settingMaxDepth" id="settingMaxDepthLabel"></label>
+						<p class="form-hint" id="scanDepthHint"></p>
+					</div>
+					<input type="number" id="settingMaxDepth" min="1" max="30" value="10" class="number" />
+				</div>
+				<div class="form-row">
+					<div>
+						<label for="settingMaxCache" id="settingMaxCacheLabel"></label>
+						<p class="form-hint" id="maxCacheHint"></p>
+					</div>
+					<input type="number" id="settingMaxCache" min="1" max="50" value="10" class="number" />
+				</div>
 			</div>
 		</div>
 	</div>
 
-	<!-- Stats widget (fixed top-right) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-header">
-			<span class="stats-widget-title" id="statsWidgetTitle"></span>
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed top-right) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-header">
-			<span class="stats-widget-title" id="statsWidgetTitle"></span>
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-left) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-left">
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-			<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-left) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<div class="stats-widget-left">
-			<span class="stats-widget-total" id="statsWidgetTotal"></span>
-			<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		</div>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-center) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Stats widget (fixed bottom-center) -->
-	<div id="statsWidget" class="stats-widget hidden">
-		<span class="stats-widget-label" id="statsWidgetTitle"></span>
-		<span class="stats-widget-total" id="statsWidgetTotal"></span>
-		<div class="stats-widget-chart" id="statsChart"></div>
-	</div>
-
-	<!-- Version label (fixed bottom-left) -->
-	<div class="version-label" id="versionLabel"></div>
-
-	<!-- Settings collapsed tab (small screens) -->
-	<button class="settings-tab" id="settingsTab" aria-label="Settings">
-		<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-		<span class="settings-tab-text" id="settingsTabText">Settings</span>
-	</button>
-
-	<!-- Settings overlay backdrop (small screens) -->
-	<div class="settings-overlay-backdrop" id="settingsOverlayBackdrop"></div>
-
-	<!-- Settings (fixed bottom-right) -->
-	<div class="settings-section" id="settingsSection">
-		<div class="settings-header">
-			<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-			<span id="settingsHeaderText"></span>
-		</div>
-		<div class="settings-body">
-			<div class="setting-row">
-				<label for="settingLang" id="settingLangLabel"></label>
-				<select id="settingLang" class="setting-select"></select>
-			</div>
-			<div class="setting-row">
-				<label for="settingMaxCache" id="settingMaxCacheLabel"></label>
-				<input type="number" id="settingMaxCache" min="1" max="50" value="10" class="setting-input-number" />
-			</div>
-			<div class="setting-row">
-				<label for="settingMaxDepth" id="settingMaxDepthLabel"></label>
-				<input type="number" id="settingMaxDepth" min="1" max="30" value="10" class="setting-input-number" />
-			</div>
-			<div class="setting-row">
-				<label for="settingDeleteMode" id="settingDeleteModeLabel"></label>
-				<select id="settingDeleteMode" class="setting-select">
-					<option value="trash" id="optionTrash"></option>
-					<option value="permanent" id="optionPermanent"></option>
-				</select>
-			</div>
-		</div>
-	</div>
-
-	<!-- Delete confirmation modal -->
+	<!-- Delete confirmation -->
 	<div id="modal-delete" class="modal hidden">
 		<div class="modal-backdrop"></div>
-		<div class="modal-card">
+		<div class="modal-card modal-card-sm modal-confirm" role="alertdialog" aria-labelledby="deleteModalTitle">
+			<div class="confirm-icon"><svg class="icon"><use href="#i-trash" /></svg></div>
 			<h3 id="deleteModalTitle"></h3>
 			<p id="deleteMessage"></p>
 			<div class="modal-actions">
@@ -180,73 +209,83 @@
 		</div>
 	</div>
 
-	<!-- Smart Clean modal -->
+	<!-- Smart Clean -->
 	<div id="modal-clean" class="modal hidden">
 		<div class="modal-backdrop"></div>
-		<div class="modal-card modal-card-lg">
-			<div class="clean-modal-header">
-				<h3 id="cleanModalTitle"></h3>
-				<span id="cleanTotalBadge" class="clean-total-badge"></span>
+		<div class="modal-card modal-card-lg" role="dialog" aria-labelledby="cleanModalTitle">
+			<div class="modal-head">
+				<div class="clean-head-icon"><svg class="icon"><use href="#i-sparkles" /></svg></div>
+				<div class="modal-head-text">
+					<h3><span id="cleanModalTitle"></span> <span id="cleanTotalBadge" class="badge badge-success"></span></h3>
+					<p class="modal-desc" id="cleanModalDesc"></p>
+				</div>
+				<button class="icon-btn modal-close" data-close-modal><svg class="icon"><use href="#i-close" /></svg></button>
 			</div>
-			<p class="clean-modal-desc" id="cleanModalDesc"></p>
+
+			<div id="cleanFilters" class="clean-filters"></div>
+
 			<div class="clean-toolbar">
-				<label class="clean-select-all">
+				<label class="checkbox-label">
 					<input type="checkbox" id="cleanSelectAll" checked />
 					<span id="cleanSelectAllLabel"></span>
 				</label>
 				<span id="cleanSelectedInfo" class="clean-selected-info"></span>
 			</div>
-			<div id="cleanFilters" class="clean-filters"></div>
+
 			<div id="cleanList" class="clean-list"></div>
-			<!-- Envsec import inline form (overlay) -->
-			<div id="envsecImportForm" class="envsec-import-form hidden">
-				<div class="envsec-import-header">
-					<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+
+			<!-- envsec import (inline sheet) -->
+			<div id="envsecImportForm" class="envsec-sheet hidden">
+				<div class="envsec-sheet-head">
+					<svg class="icon"><use href="#i-lock" /></svg>
 					<span id="envsecImportTitle"></span>
 				</div>
-				<div class="envsec-import-file" id="envsecImportFile"></div>
-				<label class="envsec-import-label" id="envsecContextLabel"></label>
-				<input type="text" id="envsecContextInput" class="envsec-import-input" placeholder="myapp.dev" />
-				<div class="envsec-import-actions">
+				<div class="envsec-sheet-file" id="envsecImportFile"></div>
+				<label class="field-label" for="envsecContextInput" id="envsecContextLabel"></label>
+				<input type="text" id="envsecContextInput" class="text-input" placeholder="myapp.dev" spellcheck="false" />
+				<div class="envsec-sheet-actions">
 					<button id="btnEnvsecCancel" class="btn btn-secondary btn-sm"></button>
-					<button id="btnEnvsecConfirm" class="btn btn-sm envsec-confirm-btn">
-						<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+					<button id="btnEnvsecConfirm" class="btn btn-sm btn-primary">
+						<svg class="icon"><use href="#i-lock" /></svg>
 						<span id="btnEnvsecConfirmText"></span>
 					</button>
 				</div>
 			</div>
-			<div class="modal-actions">
-				<button id="btnCancelClean" class="btn btn-secondary"></button>
-				<button id="btnConfirmClean" class="btn btn-danger" disabled>
-					<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-					<span id="btnConfirmCleanText"></span>
-				</button>
+
+			<div class="modal-foot">
+				<div class="risk-legend" id="riskLegend"></div>
+				<div class="modal-actions">
+					<button id="btnCancelClean" class="btn btn-secondary"></button>
+					<button id="btnConfirmClean" class="btn btn-danger" disabled>
+						<svg class="icon"><use href="#i-trash" /></svg>
+						<span id="btnConfirmCleanText"></span>
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>
 
 	<!-- Freed space toast -->
-	<div id="freedToast" class="freed-toast hidden">
-		<div class="freed-toast-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#55efc4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-		<div class="freed-toast-content">
-			<div class="freed-toast-just"><span id="freedJustLabel"></span> <span id="freedJust"></span></div>
-			<div id="freedTotalRow" class="freed-toast-total hidden"><span id="freedTotalLabel"></span> <span id="freedTotal"></span></div>
+	<div id="freedToast" class="toast hidden" role="status">
+		<div class="toast-icon"><svg class="icon"><use href="#i-check" /></svg></div>
+		<div class="toast-content">
+			<div><span id="freedJustLabel"></span> <strong id="freedJust"></strong></div>
+			<div id="freedTotalRow" class="toast-sub hidden"><span id="freedTotalLabel"></span> <span id="freedTotal"></span></div>
 		</div>
 	</div>
 
-	<!-- Info Panel (slide-in from right) -->
-	<div id="infoPanel" class="info-panel hidden">
-		<div class="info-panel-header">
-			<span class="info-panel-title" id="infoPanelTitle">Info</span>
-			<button class="info-panel-close" id="infoPanelClose" title="">
-				<svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-			</button>
+	<!-- Inspector -->
+	<div id="infoPanelBackdrop" class="inspector-backdrop hidden"></div>
+	<aside id="infoPanel" class="inspector hidden" aria-labelledby="infoPanelTitle">
+		<div class="inspector-head">
+			<div class="inspector-icon" id="infoPanelIcon"><svg class="icon"><use href="#i-folder" /></svg></div>
+			<span class="inspector-title" id="infoPanelTitle"></span>
+			<button class="icon-btn" id="infoPanelClose"><svg class="icon"><use href="#i-close" /></svg></button>
 		</div>
-		<div class="info-panel-body" id="infoPanelBody">
-			<div class="info-panel-loading" id="infoPanelLoading"></div>
+		<div class="inspector-body" id="infoPanelBody">
+			<div class="inspector-loading" id="infoPanelLoading"></div>
 		</div>
-	</div>
-	<div id="infoPanelBackdrop" class="info-panel-backdrop hidden"></div>
+	</aside>
 
 	<script type="module" src="views://mainview/index.js"></script>
 </body>
