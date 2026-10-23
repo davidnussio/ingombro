@@ -79,6 +79,9 @@ Automatic detection of system language with manual override.
 Ingombro also ships a keyboard-driven terminal interface in the style of [lazygit](https://github.com/jesseduffield/lazygit) and [lazydocker](https://github.com/jesseduffield/lazydocker), built with [OpenTUI](https://opentui.com). It shares the scanner, Smart Clean rules, cache, settings and stats with the desktop app (`~/.ingombro`), so a folder scanned in one opens instantly in the other.
 
 ```bash
+brew install davidnussio/tap/ingombro-cli   # macOS (arm64) and Linux (x64)
+ingombro ~/Developer
+
 bun run tui ~/Developer          # run from source
 bun run build:tui                # single binary in build-cli/ingombro
 ./build-cli/ingombro ~/Developer --rescan
@@ -143,7 +146,8 @@ bun run build
 ### Homebrew (recommended)
 
 ```bash
-brew install davidnussio/tap/ingombro
+brew install davidnussio/tap/ingombro       # desktop app
+brew install davidnussio/tap/ingombro-cli   # terminal UI (`ingombro`)
 ```
 
 > ⚠️ **macOS Security Notice**

@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Ingombro",
 		identifier: "ingombro.electrobun.dev",
-		version: "1.3.0",
+		version: "1.4.0",
 	},
 	build: {
 		useAsar: false,

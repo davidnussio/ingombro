@@ -1,6 +1,36 @@
-# Ingombro v1.3.0 — Collapsible Settings Panel 🎛️
+# Ingombro v1.4.0 — New Look, Terminal UI & Honest Totals ✨
 
 ---
+
+## ✨ What's New
+
+### Redesigned desktop app
+- New app layout with a sidebar: **New scan**, recent scans (size and age at a glance), a 14-day "space freed" chart and Settings
+- Light and dark themes that follow macOS
+- Start screen with path autocomplete and one-click shortcuts (Home, Desktop, Documents, Downloads, Developer, Movies)
+- Scanning screen with live folder and file counts
+- Results with a clickable breadcrumb, Reveal in Finder, a hover-highlighted treemap and a list with percentages
+- Smart Clean shows each project's name, folder and relative path, with a risk legend (Safe / Check first / Risky)
+- Settings in a proper dialog, with an explanation under each option
+- Keyboard first: arrows, Enter, Backspace, Space for details, ⌘⌫ to delete, ⌘N new scan, ⌘, settings, Esc to close
+- Safer deletes: confirmation dialogs focus **Cancel**, and Enter never confirms a deletion
+
+### Terminal UI: `ingombro-cli`
+- A lazygit-style terminal interface sharing the same engine and data (`~/.ingombro`) as the desktop app
+- Install with `brew install davidnussio/tap/ingombro-cli`, then run `ingombro [path]` (`--rescan`, `--help`, `--version`)
+
+### Accurate folder sizes
+- Totals now include `node_modules` and hidden folders (summed, not explored), so a folder's size matches what's on disk and what Smart Clean can recover
+- Folders that are only summed open their details when clicked
+
+### Faster, more robust scanning
+- Scans no longer freeze the app on huge or OS-stalled folders (iCloud, protected locations): Cancel always works
+- Rebuilt on Effect 4: typed errors, validated cache/settings files and interruptible scans
+
+---
+
+<details>
+<summary>v1.3.0 — Collapsible Settings Panel 🎛️</summary>
 
 ## ✨ What's New
 
@@ -10,7 +40,7 @@
 - Click the backdrop or press `Esc` to close
 - Works at all window sizes — cleaner UI with more room for the main content
 
----
+</details>
 
 <details>
 <summary>v1.2.0 — Auto-Updates & Version Display 🚀</summary>
