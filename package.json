@@ -14,7 +14,8 @@
 		"tui": "bun src/tui/main.ts",
 		"build:tui": "bun build src/tui/main.ts --compile --minify --outfile build-cli/ingombro",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test"
+		"test": "bun test",
+		"ui:preview": "bun scripts/ui-preview/server.ts"
 	},
 	"dependencies": {
 		"@effect/platform-bun": "4.0.5",

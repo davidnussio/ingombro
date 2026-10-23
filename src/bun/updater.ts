@@ -1,5 +1,5 @@
-import { Updater } from "electrobun/bun";
-import { Context, Effect, Layer, Schema } from "effect";
+import type { Updater } from "electrobun/bun";
+import { Context, Effect, Schema } from "effect";
 import { causeMessage } from "../core";
 
 export class UpdaterError extends Schema.TaggedError<UpdaterError>()("UpdaterError", {
@@ -11,13 +11,8 @@ export class UpdaterError extends Schema.TaggedError<UpdaterError>()("UpdaterErr
 	}
 }
 
-type UpdateInfo = Awaited<ReturnType<typeof Updater.checkForUpdate>>;
-type LocalInfo = Awaited<ReturnType<typeof Updater.getLocallocalInfo>>;
-
-const attempt = <A>(operation: string, f: () => Promise<A>) =>
-	Effect.tryPromise({ try: f, catch: (cause) => new UpdaterError({ operation, cause }) }).pipe(
-		Effect.withSpan(`AppUpdater.${operation}`),
-	);
+export type UpdateInfo = Awaited<ReturnType<typeof Updater.checkForUpdate>>;
+export type LocalInfo = Awaited<ReturnType<typeof Updater.getLocallocalInfo>>;
 
 /** Electrobun's self-updater, with typed failures. */
 export class AppUpdater extends Context.Service<
@@ -29,18 +24,4 @@ export class AppUpdater extends Context.Service<
 		readonly apply: Effect.Effect<void, UpdaterError>;
 		readonly localInfo: Effect.Effect<LocalInfo, UpdaterError>;
 	}
->()("ingombro/bun/AppUpdater") {
-	static readonly layer = Layer.succeed(
-		AppUpdater,
-		AppUpdater.of({
-			check: attempt("check", () => Updater.checkForUpdate()),
-			download: attempt("download", async () => {
-				await Updater.downloadUpdate();
-				const info = Updater.updateInfo();
-				return info?.updateReady ? info.version : undefined;
-			}),
-			apply: attempt("apply", () => Updater.applyUpdate()),
-			localInfo: attempt("localInfo", () => Updater.getLocallocalInfo()),
-		}),
-	);
-}
+>()("ingombro/bun/AppUpdater") {}
