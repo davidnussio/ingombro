@@ -1,4 +1,6 @@
-# Ingombro v1.4.0 — New Look, Terminal UI & Honest Totals ✨
+# Ingombro 2.0 — New Look, Terminal UI & Honest Totals ✨
+
+Ingombro 2.0 is a new major version: a redesigned desktop app, a terminal UI you can install with Homebrew, sizes that include every folder on disk, and an engine rebuilt on Effect 4.
 
 ---
 
@@ -28,6 +30,13 @@
 - Rebuilt on Effect 4: typed errors, validated cache/settings files and interruptible scans
 
 ---
+
+<details>
+<summary>v1.4.0 — Preview of 2.0</summary>
+
+Same features as 2.0, published as a minor release the day before.
+
+</details>
 
 <details>
 <summary>v1.3.0 — Collapsible Settings Panel 🎛️</summary>
