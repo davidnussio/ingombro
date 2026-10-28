@@ -153,12 +153,12 @@ brew install davidnussio/tap/ingombro-cli   # terminal UI (`ingombro`)
 > ⚠️ **macOS Security Notice**
 >
 > Ingombro is not signed with an Apple Developer certificate (signing costs $99/year).
-> macOS Gatekeeper may show a **"damaged and can't be opened"** warning.
->
-> As an alternative, you can install (or reinstall) with the `--no-quarantine` flag to skip the quarantine attribute entirely:
+> The Homebrew cask removes the quarantine attribute after installing, so macOS Gatekeeper
+> does not show the **"damaged and can't be opened"** warning. If you installed an older
+> version and still see it, reinstall:
 >
 > ```bash
-> HOMEBREW_CASK_OPTS="--no-quarantine" brew reinstall --cask davidnussio/tap/ingombro
+> brew reinstall --cask davidnussio/tap/ingombro
 > ```
 
 ### Manual download

@@ -224,6 +224,14 @@ jobs:
 
             app "Ingombro.app"
 
+            # The app is not signed with an Apple Developer certificate:
+            # drop the quarantine attribute so Gatekeeper lets it open.
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args:         ["-dr", "com.apple.quarantine", "#{appdir}/Ingombro.app"],
+                             must_succeed: false
+            end
+
             zap trash: [
               "~/Library/Application Support/ingombro.electrobun.dev",
               "~/Library/Preferences/ingombro.electrobun.dev.plist",
