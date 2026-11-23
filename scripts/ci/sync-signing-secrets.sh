@@ -19,6 +19,8 @@
 # Usage: scripts/ci/sync-signing-secrets.sh [--repo owner/name]
 #   DRY_RUN=1          rebuild and check the .p12, change nothing
 #   SOURCE_KEYCHAIN=…  keychain to export from (default: login.keychain-db)
+#   FROM_ENVSEC=1      start from the macos.cert.p12 already in envsec instead
+#                      of exporting the keychain (no macOS password prompt)
 set -euo pipefail
 
 CTX="${ENVSEC_CONTEXT:-apple}"
@@ -40,8 +42,13 @@ WORK="$(mktemp -d)"
 chmod 700 "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Exporting the keychain identities (macOS may ask for the keychain password)..."
-security export -k "$KEYCHAIN" -t identities -f pkcs12 -P "$P12_PASSWORD" -o "$WORK/all.p12" > /dev/null
+if [[ "${FROM_ENVSEC:-}" == "1" ]]; then
+	# Rebuild from the .p12 already stored in envsec (no keychain prompt).
+	get macos.cert.p12 | tr -d '\n' | base64 -D > "$WORK/all.p12"
+else
+	echo "Exporting the keychain identities (macOS may ask for the keychain password)..."
+	security export -k "$KEYCHAIN" -t identities -f pkcs12 -P "$P12_PASSWORD" -o "$WORK/all.p12" > /dev/null
+fi
 
 # Split the export into one PEM file per certificate and per private key.
 "$OPENSSL" pkcs12 -in "$WORK/all.p12" -nokeys -passin env:P12_PASSWORD 2> /dev/null |
