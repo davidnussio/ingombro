@@ -21,6 +21,14 @@ export default {
 			"src/mainview/index.css": "views/mainview/index.css",
 			"src/assets/icon.png": "views/mainview/assets/icon.png",
 		},
+		mac: {
+			// Developer ID signature + Apple notarization for canary/stable builds
+			// (dev builds skip both). Credentials come from ELECTROBUN_* env vars:
+			// ELECTROBUN_DEVELOPER_ID, ELECTROBUN_APPLEAPIKEY,
+			// ELECTROBUN_APPLEAPIISSUER, ELECTROBUN_APPLEAPIKEYPATH.
+			codesign: true,
+			notarize: true,
+		},
 		win: {
 			icon: "assets/icon.ico",
 		},

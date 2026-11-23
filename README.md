@@ -150,28 +150,11 @@ brew install davidnussio/tap/ingombro       # desktop app
 brew install davidnussio/tap/ingombro-cli   # terminal UI (`ingombro`)
 ```
 
-> ⚠️ **macOS Security Notice**
->
-> Ingombro is not signed with an Apple Developer certificate (signing costs $99/year).
-> The Homebrew cask removes the quarantine attribute after installing, so macOS Gatekeeper
-> does not show the **"damaged and can't be opened"** warning. If you installed an older
-> version and still see it, reinstall:
->
-> ```bash
-> brew reinstall --cask davidnussio/tap/ingombro
-> ```
-
 ### Manual download
 
 Download the latest release from the [Releases](../../releases) page and drag the app into your Applications folder.
 
-If macOS blocks the app, remove the quarantine attribute manually:
-
-```bash
-xattr -d com.apple.quarantine /Applications/Ingombro.app
-```
-
-Learn more about [macOS Gatekeeper](https://support.apple.com/en-us/guide/security/sec5599b66df/web).
+Since 2.0.1 the app and the macOS `ingombro` binary are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens them without warnings.
 
 ## Settings
 

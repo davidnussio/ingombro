@@ -1,4 +1,15 @@
-# Ingombro 2.0 — New Look, Terminal UI & Honest Totals ✨
+# Ingombro 2.0.1 — Signed & Notarized 🔏
+
+Ingombro is now signed with a Developer ID certificate and notarized by Apple.
+
+- The desktop app and the DMG open without the **"damaged and can't be opened"** warning: no more `xattr` workaround
+- The Homebrew cask no longer strips the quarantine attribute after installing
+- The macOS `ingombro` binary of `ingombro-cli` is signed and notarized too
+
+---
+
+<details>
+<summary>v2.0.0 — New Look, Terminal UI & Honest Totals ✨</summary>
 
 Ingombro 2.0 is a new major version: a redesigned desktop app, a terminal UI you can install with Homebrew, sizes that include every folder on disk, and an engine rebuilt on Effect 4.
 
@@ -29,7 +40,7 @@ Ingombro 2.0 is a new major version: a redesigned desktop app, a terminal UI you
 - Scans no longer freeze the app on huge or OS-stalled folders (iCloud, protected locations): Cancel always works
 - Rebuilt on Effect 4: typed errors, validated cache/settings files and interruptible scans
 
----
+</details>
 
 <details>
 <summary>v1.4.0 — Preview of 2.0</summary>
@@ -160,16 +171,6 @@ Smart Clean now detects sensitive files left in your projects:
 - **7 languages**: 🇮🇹 🇬🇧 🇪🇸 🇫🇷 🇩🇪 🇧🇷 🇯🇵
 
 </details>
-
----
-
-## ⚠️ macOS Security Notice
-
-Ingombro is not signed with an Apple Developer certificate. If macOS shows a "damaged and can't be opened" warning, run:
-
-```bash
-xattr -d com.apple.quarantine /Applications/Ingombro.app
-```
 
 ---
 

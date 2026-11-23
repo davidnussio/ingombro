@@ -16,6 +16,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Developer ID certificate used for the app and the macOS CLI binary
+  # (secrets: MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_API_KEY_P8,
+  # APPLE_API_KEY_ID, APPLE_API_ISSUER).
+  DEVELOPER_ID: "Developer ID Application: dambox Sagl (CLFTJ6F63K)"
+
 jobs:
   build-and-release:
     strategy:
@@ -72,7 +78,18 @@ jobs:
       - name: Installa le dipendenze
         run: bun install
 
-      - name: Build dell'app
+      - name: Prepara firma e notarizzazione
+        run: scripts/ci/macos-signing-setup.sh
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+
+      - name: Build dell'app (firmata e notarizzata)
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ env.DEVELOPER_ID }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.APPLE_API_KEY_ID }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           if [[ "${{ env.IS_PRERELEASE }}" == "true" ]]; then
             bun run build:canary
@@ -80,6 +97,17 @@ jobs:
             bun run build:stable
           fi
         shell: bash
+
+      - name: Verifica firma e notarizzazione
+        shell: bash
+        run: |
+          DMG="$(ls artifacts/*.dmg | head -n 1)"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+
+      - name: Rimuovi keychain e chiave API
+        if: always()
+        run: scripts/ci/macos-signing-cleanup.sh
 
       - name: Pubblica su GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -123,16 +151,32 @@ jobs:
       - name: Installa le dipendenze
         run: bun install
 
+      - name: Prepara firma e notarizzazione
+        if: runner.os == 'macOS'
+        run: scripts/ci/macos-signing-setup.sh
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+
       - name: Compila il binario
         shell: bash
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ env.DEVELOPER_ID }}
+          ELECTROBUN_APPLEAPIKEY: ${{ secrets.APPLE_API_KEY_ID }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           bun run build:tui
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            codesign --force --sign - build-cli/ingombro
+            scripts/ci/sign-cli.sh build-cli/ingombro
           fi
           ./build-cli/ingombro --version
           tar -czf "ingombro-cli-${{ matrix.target }}.tar.gz" -C build-cli ingombro
           shasum -a 256 "ingombro-cli-${{ matrix.target }}.tar.gz" > "ingombro-cli-${{ matrix.target }}.tar.gz.sha256"
+
+      - name: Rimuovi keychain e chiave API
+        if: always() && runner.os == 'macOS'
+        run: scripts/ci/macos-signing-cleanup.sh
 
       - name: Pubblica su GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -223,14 +267,6 @@ jobs:
             depends_on arch: :arm64
 
             app "Ingombro.app"
-
-            # The app is not signed with an Apple Developer certificate:
-            # drop the quarantine attribute so Gatekeeper lets it open.
-            postflight do
-              system_command "/usr/bin/xattr",
-                             args:         ["-dr", "com.apple.quarantine", "#{appdir}/Ingombro.app"],
-                             must_succeed: false
-            end
 
             zap trash: [
               "~/Library/Application Support/ingombro.electrobun.dev",
